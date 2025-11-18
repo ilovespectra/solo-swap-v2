@@ -29,7 +29,7 @@ export function RpcStatus() {
 
   return (
     <div className="flex items-center space-x-4 text-xs">
-      <span className="text-gray-400">status:</span>
+      {/* <span className="text-gray-400">status:</span> */}
       
       {loading ? (
         <div className="flex items-center space-x-1 text-gray-400">

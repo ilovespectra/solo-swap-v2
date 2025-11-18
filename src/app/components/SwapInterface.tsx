@@ -5,7 +5,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { TokenBalance } from '../types/token';
 import { TokenService } from '../lib/api';
-import { ArrowUpDown, Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield } from 'lucide-react';
+import { ArrowUpDown, Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield, ChevronDown } from 'lucide-react';
 
 interface SwapInterfaceProps {
   selectedTokens: TokenBalance[];
@@ -66,6 +66,7 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
   const [error, setError] = useState<string>('');
   const [currentStep, setCurrentStep] = useState<string>('');
   const [swapResults, setSwapResults] = useState<SwapResult[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Detect if connected wallet is Ledger
   const isLedgerConnected = useMemo(() => {
@@ -450,21 +451,22 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
   const hasFailedSwaps = swapResults.some(result => result.error);
 
   return (
-    <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm border border-gray-700 h-fit">
-      <h2 className="text-xl font-semibold mb-6 flex items-center space-x-2">
-        <ShoppingCart className="h-5 w-5" />
+    <div className="bg-gray-800/50 rounded-xl p-4 sm:p-6 backdrop-blur-sm border border-gray-700 h-fit mobile-optimized relative z-10">
+      
+      <h2 className="text-lg sm:text-xl font-semibold mb-4 sm:mb-6 flex items-center space-x-2 text-optimized">
+        <ShoppingCart className="h-4 w-4 sm:h-5 sm:w-5" />
         <span>cart</span>
       </h2>
 
       {/* Wallet Status Indicator */}
       {wallet && (
-        <div className={`mb-4 p-3 rounded-lg border ${
+        <div className={`mb-3 sm:mb-4 p-2 sm:p-3 rounded-lg border ${
           isLedgerConnected 
             ? 'bg-green-500/20 border-green-500' 
             : 'bg-blue-500/20 border-blue-500'
         }`}>
-          <div className="flex items-center space-x-2 text-sm font-medium lowercase">
-            <Shield className="h-4 w-4" />
+          <div className="flex items-center space-x-2 text-xs sm:text-sm font-medium lowercase">
+            <Shield className="h-3 w-3 sm:h-4 sm:w-4" />
             <span>{wallet.adapter.name} connected</span>
           </div>
           <p className="text-xs mt-1 lowercase">
@@ -477,26 +479,26 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
       )}
 
       {selectedTokens.length === 0 ? (
-        <div className="text-center py-8 text-gray-400">
-          <Calculator className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>select tokens to enable liquidation</p>
+        <div className="text-center py-6 sm:py-8 text-gray-400">
+          <Calculator className="h-8 w-8 sm:h-12 sm:w-12 mx-auto mb-3 sm:mb-4 opacity-50" />
+          <p className="text-sm sm:text-base">select tokens to enable liquidation</p>
         </div>
       ) : (
         <>
           {/* Summary Section */}
-          <div className="space-y-4 mb-6">
-            <div className="flex justify-between text-sm">
+          <div className="space-y-3 sm:space-y-4 mb-4 sm:mb-6">
+            <div className="flex justify-between text-xs sm:text-sm">
               <span>selected tokens:</span>
               <span>{selectedTokens.length}</span>
             </div>
-            <div className="flex justify-between text-sm">
+            <div className="flex justify-between text-xs sm:text-sm">
               <span>total value:</span>
               <span>${totalSelectedValue.toFixed(2)}</span>
             </div>
 
             {/* Percentage Selector */}
-            <div className="space-y-3">
-              <div className="flex justify-between text-sm">
+            <div className="space-y-2 sm:space-y-3">
+              <div className="flex justify-between text-xs sm:text-sm">
                 <span className="text-gray-300">liquidation percentage</span>
                 <span className="text-purple-400 font-medium">
                   {liquidationPercentage}%
@@ -511,14 +513,14 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
                   step="1"
                   value={liquidationPercentage}
                   onChange={(e) => setLiquidationPercentage(Number(e.target.value))}
-                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider mobile-optimized"
                 />
-                <div className="flex justify-between text-xs text-gray-400">
+                <div className="flex justify-between text-xs text-gray-400 mobile-button-group">
                   {[0, 25, 50, 75, 100].map((percent) => (
                     <button
                       key={percent}
                       onClick={() => setLiquidationPercentage(percent)}
-                      className={`px-2 py-1 rounded ${
+                      className={`px-1 sm:px-2 py-1 rounded text-xs ${
                         liquidationPercentage === percent 
                           ? 'bg-purple-600 text-white' 
                           : 'hover:bg-gray-700'
@@ -532,14 +534,14 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
             </div>
 
             {/* Liquidation Summary */}
-            <div className="bg-gray-700/50 rounded-lg p-4 space-y-2">
-              <div className="flex justify-between text-sm">
+            <div className="bg-gray-700/50 rounded-lg p-3 sm:p-4 space-y-2">
+              <div className="flex justify-between text-xs sm:text-sm">
                 <span className="text-gray-300">to liquidate</span>
                 <span className="text-green-400 font-medium">
                   ${liquidationValue.toFixed(2)}
                 </span>
               </div>
-              <div className="flex justify-between text-sm">
+              <div className="flex justify-between text-xs sm:text-sm">
                 <span className="text-gray-300">receive in {outputTokenSymbol}</span>
                 <span className="text-blue-400 font-medium">
                   ~${liquidationValue.toFixed(2)}
@@ -547,56 +549,72 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
               </div>
             </div>
             
-            {/* Output Token Selection */}
-            <div>
-              <label className="block text-sm font-medium mb-2">output token</label>
-              <select
-                value={outputToken}
-                onChange={(e) => setOutputToken(e.target.value)}
-                className="w-full bg-gray-700/50 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            {/* Advanced Settings Toggle */}
+            <div className="border-t border-gray-600 pt-3">
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center space-x-2 text-xs sm:text-sm text-gray-300 hover:text-white transition-colors w-full mobile-optimized"
               >
-                {OUTPUT_TOKENS.map(token => (
-                  <option key={token.mint} value={token.mint}>
-                    {token.symbol}
-                  </option>
-                ))}
-              </select>
+                <span>advanced settings</span>
+                <ChevronDown className={`h-3 w-3 sm:h-4 sm:w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+              </button>
             </div>
 
-            {/* Slippage Tolerance */}
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                slippage tolerance: {slippage}%
-              </label>
-              <input
-                type="range"
-                min="0.5"
-                max="10"
-                step="0.5"
-                value={slippage}
-                onChange={(e) => setSlippage(parseFloat(e.target.value))}
-                className="w-full accent-purple-500"
-              />
-              <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>0.5%</span>
-                <span>10%</span>
+            {/* Advanced Settings */}
+            {showAdvanced && (
+              <div className="space-y-3 sm:space-y-4 animate-slideDown">
+                {/* Output Token Selection */}
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium mb-2">output token</label>
+                  <select
+                    value={outputToken}
+                    onChange={(e) => setOutputToken(e.target.value)}
+                    className="w-full bg-gray-700/50 border border-gray-600 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent mobile-optimized"
+                  >
+                    {OUTPUT_TOKENS.map(token => (
+                      <option key={token.mint} value={token.mint}>
+                        {token.symbol}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Slippage Tolerance */}
+                <div>
+                  <label className="block text-xs sm:text-sm font-medium mb-2">
+                    slippage tolerance: {slippage}%
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="10"
+                    step="0.5"
+                    value={slippage}
+                    onChange={(e) => setSlippage(parseFloat(e.target.value))}
+                    className="w-full accent-purple-500 mobile-optimized"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>0.5%</span>
+                    <span>10%</span>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Token Breakdown - FIXED DISPLAY */}
-          <div className="mb-6">
-            <h3 className="font-medium mb-3">liquidation breakdown</h3>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+          {/* Token Breakdown */}
+          <div className="mb-4 sm:mb-6">
+            <h3 className="font-medium text-sm sm:text-base mb-2 sm:mb-3">liquidation breakdown</h3>
+            <div className="space-y-2 max-h-32 sm:max-h-48 overflow-y-auto mobile-scroll">
               {proRataTokens.map((token) => (
-                <div key={token.mint} className="flex justify-between items-center text-sm bg-gray-700/30 p-2 rounded">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold">
+                <div key={token.mint} className="flex justify-between items-center text-xs sm:text-sm bg-gray-700/30 p-2 rounded">
+                  <div className="flex items-center space-x-2 min-w-0 flex-1">
+                    <div className="w-4 h-4 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
                       {token.symbol.slice(0, 2)}
                     </div>
-                    <span>{token.symbol}</span>
+                    <span className="truncate">{token.symbol}</span>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex-shrink-0">
                     <div className="text-green-400">
                       {token.swapAmount > 0.0001 ? token.swapAmount.toFixed(4) : token.swapAmount.toFixed(6)}
                     </div>
@@ -609,31 +627,31 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
             </div>
           </div>
 
-          {/* Swap Results - FIXED DISPLAY */}
+          {/* Swap Results */}
           {swapResults.length > 0 && (
             <div className="mb-4 p-3 bg-gray-700/50 border border-gray-600 rounded-lg">
               <div className="flex justify-between items-center mb-2">
-                <h4 className="font-medium">liquidation results</h4>
+                <h4 className="font-medium text-sm sm:text-base">liquidation results</h4>
                 {hasFailedSwaps && (
                   <button
                     onClick={() => {/* Add retry logic */}}
                     disabled={swapping}
-                    className="text-xs bg-yellow-600 hover:bg-yellow-700 px-2 py-1 rounded flex items-center space-x-1"
+                    className="text-xs bg-yellow-600 hover:bg-yellow-700 px-2 py-1 rounded flex items-center space-x-1 mobile-optimized"
                   >
                     <RefreshCw className="h-3 w-3" />
                     <span>Retry Failed</span>
                   </button>
                 )}
               </div>
-              <div className="space-y-2 max-h-32 overflow-y-auto">
+              <div className="space-y-2 max-h-32 overflow-y-auto mobile-scroll">
                 {swapResults.map((result, index) => (
-                  <div key={index} className="flex justify-between items-center text-sm">
-                    <div className="flex items-center space-x-2">
-                      <span className={result.error ? 'text-red-400' : 'text-green-400'}>
+                  <div key={index} className="flex justify-between items-center text-xs sm:text-sm">
+                    <div className="flex items-center space-x-2 min-w-0 flex-1">
+                      <span className={`truncate ${result.error ? 'text-red-400' : 'text-green-400'}`}>
                         {result.symbol}
                       </span>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right flex-shrink-0">
                       {result.error ? (
                         <span className="text-red-400 text-xs">failed</span>
                       ) : result.signature ? (
@@ -642,7 +660,7 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
                             href={`https://solscan.io/tx/${result.signature}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-green-400 hover:text-green-300 text-xs flex items-center space-x-1"
+                            className="text-green-400 hover:text-green-300 text-xs flex items-center space-x-1 mobile-optimized"
                           >
                             <span>success</span>
                             <ExternalLink className="h-3 w-3" />
@@ -665,8 +683,8 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
           {swapping && currentStep && (
             <div className="mb-4 p-3 bg-blue-500/20 border border-blue-500 rounded-lg">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-blue-200">{currentStep}</span>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                <span className="text-xs sm:text-sm text-blue-200">{currentStep}</span>
+                <div className="animate-spin rounded-full h-3 w-3 sm:h-4 sm:w-4 border-b-2 border-white"></div>
               </div>
             </div>
           )}
@@ -674,10 +692,10 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
           {error && (
             <div className="mb-4 p-3 bg-red-500/20 border border-red-500 rounded-lg">
               <div className="flex items-center space-x-2 text-red-200 mb-2">
-                <AlertCircle className="h-4 w-4" />
-                <span className="text-sm font-medium">liquidation error</span>
+                <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span className="text-xs sm:text-sm font-medium">liquidation error</span>
               </div>
-              <span className="text-sm">{error}</span>
+              <span className="text-xs sm:text-sm">{error}</span>
             </div>
           )}
 
@@ -686,17 +704,17 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
             <button
               onClick={executeLiquidation}
               disabled={swapping || selectedTokens.length === 0 || !publicKey || liquidationPercentage === 0}
-              className="w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed py-3 px-4 rounded-lg font-medium transition-all duration-200 transform hover:scale-[1.02] flex items-center justify-center space-x-2"
+              className="w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed py-3 px-4 rounded-lg font-medium transition-all duration-200 transform hover:scale-[1.02] flex items-center justify-center space-x-2 mobile-optimized text-sm sm:text-base min-h-[44px]"
             >
               {swapping ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>liquidating... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
+                  <span className="text-xs sm:text-sm">liquidating... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
                 </>
               ) : (
                 <>
                   <DollarSign className="h-4 w-4" />
-                  <span>liquidate {liquidationPercentage}% to {outputTokenSymbol}</span>
+                  <span className="text-xs sm:text-sm">liquidate {liquidationPercentage}% to {outputTokenSymbol}</span>
                   {isLedgerConnected && <Shield className="h-4 w-4 ml-1" />}
                 </>
               )}

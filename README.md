@@ -65,7 +65,7 @@ Solo Swap enables users to efficiently liquidate multiple Solana tokens in a sin
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/ilovespectra/solo-swap-v2.git
    cd solana-token-swapper
    ```
 

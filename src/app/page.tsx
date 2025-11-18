@@ -105,8 +105,8 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 to-black text-white p-3 sm:p-4">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <header className="flex justify-between items-center mb-6 sm:mb-8 p-3 sm:p-4 bg-gray-800/50 rounded-lg backdrop-blur-sm">
+        {/* Header - HIGHER Z-INDEX */}
+        <header className="flex justify-between items-center mb-6 sm:mb-8 p-3 sm:p-4 bg-gray-800/50 rounded-lg backdrop-blur-sm relative z-30">
           <div className="flex items-center space-x-3 sm:space-x-4">
             <div className="flex items-center space-x-2">
               <Image
@@ -131,7 +131,9 @@ export default function Home() {
             >
               <Settings2 className="h-5 w-5" />
             </button>
-            <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700 !transition-colors !text-sm" />
+            <div className="relative z-40">
+              <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700 !transition-colors !text-sm" />
+            </div>
           </div>
 
           {/* Mobile Menu Button */}
@@ -148,7 +150,7 @@ export default function Home() {
 
         {/* Mobile Menu */}
         {showMobileMenu && (
-          <div className="sm:hidden mb-4 p-4 bg-gray-800/80 rounded-lg backdrop-blur-sm border border-gray-700">
+          <div className="sm:hidden mb-4 p-4 bg-gray-800/80 rounded-lg backdrop-blur-sm border border-gray-700 relative z-30">
             <div className="flex flex-col space-y-3">
               <button
                 onClick={() => {
@@ -160,15 +162,15 @@ export default function Home() {
                 <Settings2 className="h-4 w-4" />
                 <span>Settings</span>
               </button>
-              <div className="flex justify-center">
+              <div className="flex justify-center relative z-40">
                 <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700 !transition-colors !text-sm !py-2 !px-4" />
               </div>
             </div>
           </div>
         )}
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+        {/* Main Content - LOWER Z-INDEX */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 relative z-10">
           {/* Token Table */}
           <div className="lg:col-span-2 order-2 lg:order-1">
             <div className="bg-gray-800/50 rounded-xl p-4 sm:p-6 backdrop-blur-sm border border-gray-700">
@@ -237,7 +239,7 @@ export default function Home() {
         )}
 
         {/* Debug Panel */}
-        <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-gray-800/30 rounded-lg border border-gray-700">
+        <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-gray-800/30 rounded-lg border border-gray-700 relative z-10">
           <h3 className="text-xs sm:text-sm font-medium mb-2 text-gray-400">debug</h3>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 text-xs">
             <div>

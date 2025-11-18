@@ -157,7 +157,6 @@ export default function Home() {
                 className="flex items-center space-x-2 p-2 hover:bg-gray-700 rounded-lg transition-colors"
               >
                 <Settings2 className="h-4 w-4" />
-                <span>Settings</span>
               </button>
               <div className="flex justify-center relative z-40">
                 <WalletMultiButton className="!bg-purple-600 hover:!bg-purple-700 !transition-colors !text-sm !py-2 !px-4" />
@@ -235,30 +234,44 @@ export default function Home() {
           <SettingsPanel onClose={() => setShowSettings(false)} />
         )}
 
-        {/* Debug Panel */}
-        {/* <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-gray-800/30 rounded-lg border border-gray-700 relative z-10">
-          <h3 className="text-xs sm:text-sm font-medium mb-2 text-gray-400">debug</h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 text-xs">
-            <div>
-              <div className="text-gray-400">wallet connected</div>
-              <div className={connected ? 'text-green-400' : 'text-red-400'}>
-                {connected ? 'yes' : 'no'}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">total tokens</div>
-              <div>{tokens.length}</div>
-            </div>
-            <div>
-              <div className="text-gray-400">selected tokens</div>
-              <div>{selectedTokens.length}</div>
-            </div>
-            <div>
-              <div className="text-gray-400">selected value</div>
-              <div>${totalSelectedValue.toFixed(2)}</div>
-            </div>
-          </div>
-        </div> */}
+      <div className="mt-4 sm:mt-6 pt-4 border-t border-gray-700/50">
+        <div className="flex justify-center items-center space-x-6">
+          {/* Twitter Link */}
+          <a
+            href="https://twitter.com/ilovespectra"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center space-x-2 text-gray-400 hover:text-blue-400 transition-colors duration-200"
+            aria-label="follow on twitter"
+          >
+            <svg 
+              className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" 
+              fill="currentColor" 
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path d="M8.29 20.251c7.547 0 11.675-6.253 11.675-11.675 0-.178 0-.355-.012-.53A8.348 8.348 0 0022 5.92a8.19 8.19 0 01-2.357.646 4.118 4.118 0 001.804-2.27 8.224 8.224 0 01-2.605.996 4.107 4.107 0 00-6.993 3.743 11.65 11.65 0 01-8.457-4.287 4.106 4.106 0 001.27 5.477A4.072 4.072 0 012.8 9.713v.052a4.105 4.105 0 003.292 4.022 4.095 4.095 0 01-1.853.07 4.108 4.108 0 003.834 2.85A8.233 8.233 0 012 18.407a11.616 11.616 0 006.29 1.84" />
+            </svg>
+          </a>
+
+          <a
+            href="https://github.com/ilovespectra/solo-swap-v2"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center space-x-2 text-gray-400 hover:text-purple-400 transition-colors duration-200"
+            aria-label="view on gitHub"
+          >
+            <svg 
+              className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" 
+              fill="currentColor" 
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.337-3.369-1.337-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.022.8-.223 1.65-.334 2.5-.338.85.004 1.7.115 2.5.338 1.91-1.291 2.75-1.022 2.75-1.022.544 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z" />
+            </svg>
+          </a>
+        </div>
+      </div>
       </div>
     </div>
   );

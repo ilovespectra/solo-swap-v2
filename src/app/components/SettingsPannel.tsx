@@ -1,4 +1,4 @@
-import { Settings, X } from 'lucide-react';
+import { Settings, X, Github, Twitter } from 'lucide-react';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -14,12 +14,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         <div className="flex justify-between items-center mb-4 sm:mb-6">
           <h2 className="text-lg sm:text-xl font-semibold flex items-center space-x-2 text-optimized">
             <Settings className="h-4 w-4 sm:h-5 sm:w-5" />
-            <span>settings</span>
           </h2>
           <button
             onClick={onClose}
             className="p-1 sm:p-2 hover:bg-gray-700 rounded transition-colors mobile-optimized min-h-[44px] min-w-[44px] flex items-center justify-center"
-            aria-label="Close settings"
+            aria-label="close settings"
           >
             <X className="h-4 w-4 sm:h-5 sm:w-5" />
           </button>
@@ -54,7 +53,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             </select>
           </div>
 
-          {/* Mobile-optimized action buttons */}
           <div className="pt-4 border-t border-gray-700">
             <div className="flex flex-col sm:flex-row sm:justify-end space-y-2 sm:space-y-0 sm:space-x-3">
               <button
@@ -71,10 +69,36 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               </button>
             </div>
           </div>
+        
+          <div className="pt-2 border-t border-gray-700">
+            <div className="flex justify-center space-x-8">
+              {/* GitHub Link */}
+              <a
+                href="https://github.com/ilovespectra/solo-swap-v2"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col items-center space-y-1 text-gray-400 hover:text-purple-400 transition-colors duration-200 mobile-optimized"
+                aria-label="View on GitHub"
+              >
+                <div className="p-2 bg-gray-700/50 rounded-lg group-hover:bg-purple-500/20 transition-colors">
+                  <Github className="h-5 w-5 sm:h-6 sm:w-6 group-hover:scale-110 transition-transform duration-200" />
+                </div>
+                <span className="text-xs font-medium">github</span>
+              </a>
 
-          {/* Mobile-specific info */}
-          <div className="sm:hidden text-xs text-gray-400 text-center pt-2">
-            tap outside to close
+              <a
+                href="https://x.com/iLoveSpectra"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col items-center space-y-1 text-gray-400 hover:text-blue-400 transition-colors duration-200 mobile-optimized"
+                aria-label="Follow on Twitter"
+              >
+                <div className="p-2 bg-gray-700/50 rounded-lg group-hover:bg-blue-500/20 transition-colors">
+                  <Twitter className="h-5 w-5 sm:h-6 sm:w-6 group-hover:scale-110 transition-transform duration-200" />
+                </div>
+                <span className="text-xs font-medium">twitter</span>
+              </a>
+            </div>
           </div>
         </div>
       </div>

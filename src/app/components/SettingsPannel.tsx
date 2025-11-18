@@ -72,18 +72,16 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         
           <div className="pt-2 border-t border-gray-700">
             <div className="flex justify-center space-x-8">
-              {/* GitHub Link */}
               <a
                 href="https://github.com/ilovespectra/solo-swap-v2"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group flex flex-col items-center space-y-1 text-gray-400 hover:text-purple-400 transition-colors duration-200 mobile-optimized"
-                aria-label="View on GitHub"
+                aria-label="view on gitHub"
               >
                 <div className="p-2 bg-gray-700/50 rounded-lg group-hover:bg-purple-500/20 transition-colors">
                   <Github className="h-5 w-5 sm:h-6 sm:w-6 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <span className="text-xs font-medium">github</span>
               </a>
 
               <a
@@ -91,12 +89,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group flex flex-col items-center space-y-1 text-gray-400 hover:text-blue-400 transition-colors duration-200 mobile-optimized"
-                aria-label="Follow on Twitter"
+                aria-label="follow on twitter"
               >
                 <div className="p-2 bg-gray-700/50 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                   <Twitter className="h-5 w-5 sm:h-6 sm:w-6 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <span className="text-xs font-medium">twitter</span>
               </a>
             </div>
           </div>

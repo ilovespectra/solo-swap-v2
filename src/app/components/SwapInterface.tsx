@@ -244,6 +244,8 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
 
           const quoteData = await getSwapQuote(token);
 
+          const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
+
           const swapResponse = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
             method: 'POST',
             headers: {
@@ -262,7 +264,10 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
               },
               wrapAndUnwrapSol: true,
               asLegacyTransaction: false,
-              useSharedAccounts: true
+              useSharedAccounts: true,
+              configs: {
+                recentBlockhash: blockhash
+              }
             })
           });
 
@@ -281,23 +286,26 @@ export function SwapInterface({ selectedTokens, totalSelectedValue, onSwapComple
             Buffer.from(swapData.swapTransaction, 'base64')
           );
 
-          const { blockhash, lastValidBlockHeight } = await getFreshBlockhash();
-          const newTransaction = new VersionedTransaction(transaction.message);
-          newTransaction.message.recentBlockhash = blockhash;
-
           setCurrentStep(`confirm ${token.symbol} swap...`);
-          const signedTransaction = await signTransactionUniversal(newTransaction);
+          
+          const signedTransaction = await signTransactionUniversal(transaction);
           
           setCurrentStep(`sending ${token.symbol} transaction...`);
-          const signature = await sendTransaction?.(signedTransaction, connection, {
-            skipPreflight: true,
-            preflightCommitment: 'confirmed',
-            maxRetries: 3
-          });
+          
+          const signature = await connection.sendRawTransaction(
+            signedTransaction.serialize(),
+            {
+              skipPreflight: true,
+              preflightCommitment: 'confirmed',
+              maxRetries: 3
+            }
+          );
 
           if (!signature) {
             throw new Error('failed to send transaction - no signature returned');
           }
+
+          console.log(`📤 transaction sent with signature: ${signature}`);
 
           setCurrentStep(`confirming ${token.symbol} transaction...`);
           const confirmation = await connection.confirmTransaction({

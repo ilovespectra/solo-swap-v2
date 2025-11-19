@@ -286,25 +286,25 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
     if (!result) return '';
 
     const header = `💰 pro-rata swap shopping list for ${walletInput}\n`;
-    const summary = `total portfolio value: $${result.totalValue.toFixed(2)}\nselected tokens: ${selectedTokens.size}/${result.tokens.length}\nselected value: $${selectedTokensValue.toFixed(2)}\n\n`;
+    const summary = `total portfolio value: $${result.totalValue.toLocaleString()}\nselected tokens: ${selectedTokens.size}/${result.tokens.length}\nselected value: $${selectedTokensValue.toLocaleString()}\n\n`;
     
     let tokenList: string;
     
     if (hasLiquidation) {
       tokenList = proRataTokens.map(token => {
-        const valuePercentage = selectedTokensValue > 0 ? ((token.value || 0) / selectedTokensValue * 100).toFixed(1) : '0';
-        return `${token.symbol.padEnd(12)} | ${token.swapAmount.toFixed(6).padStart(12)} | $${token.liquidationAmount.toFixed(2).padStart(10)} | ${valuePercentage}%`;
+        const valuePercentage = selectedTokensValue > 0 ? ((token.value || 0) / selectedTokensValue * 100).toLocaleString() : '0';
+        return `${token.symbol.padEnd(12)} | ${token.swapAmount.toLocaleString().padStart(12)} | $${token.liquidationAmount.toLocaleString().padStart(10)} | ${valuePercentage}%`;
       }).join('\n');
     } else {
       tokenList = sortedTokens
         .filter(token => selectedTokens.has(token.mint))
         .map(token => {
-          const valuePercentage = selectedTokensValue > 0 ? ((token.value || 0) / selectedTokensValue * 100).toFixed(1) : '0';
-          return `${token.symbol.padEnd(12)} | ${token.uiAmount.toFixed(6).padStart(12)} | $${(token.value || 0).toFixed(2).padStart(10)} | ${valuePercentage}%`;
+          const valuePercentage = selectedTokensValue > 0 ? ((token.value || 0) / selectedTokensValue * 100).toLocaleString() : '0';
+          return `${token.symbol.padEnd(12)} | ${token.uiAmount.toLocaleString().padStart(12)} | $${(token.value || 0).toLocaleString().padStart(10)} | ${valuePercentage}%`;
         }).join('\n');
     }
 
-    const liquidationInfo = hasLiquidation ? `\n💸 liquidation amount: $${liquidationValue.toFixed(2)} (${((liquidationValue / selectedTokensValue) * 100).toFixed(1)}% of selected)\nremaining portfolio: $${remainingPortfolioValue.toFixed(2)}\n` : '';
+    const liquidationInfo = hasLiquidation ? `\n💸 liquidation amount: $${liquidationValue.toLocaleString()} (${((liquidationValue / selectedTokensValue) * 100).toLocaleString()}% of selected)\nremaining portfolio: $${remainingPortfolioValue.toLocaleString()}\n` : '';
     const footer = `\n💡 use this list with your multisig wallet for pro-rata swaps.`;
 
     return header + summary + liquidationInfo + 'token'.padEnd(12) + ' | ' + 'amount'.padStart(12) + ' | ' + 'value'.padStart(10) + ' | share\n' + 
@@ -466,14 +466,14 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-bold text-green-400">
-                  ${result.totalValue.toFixed(2)}
+                  ${result.totalValue.toLocaleString()}
                 </div>
                 <div className="text-sm text-gray-400">
                   {result.tokens.length} tokens
                 </div>
                 {selectedTokens.size > 0 && (
                   <div className="text-sm text-purple-400">
-                    {selectedTokens.size} selected (${selectedTokensValue.toFixed(2)})
+                    {selectedTokens.size} selected (${selectedTokensValue.toLocaleString()})
                   </div>
                 )}
               </div>
@@ -495,7 +495,7 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
                   </div>
                   {selectedTokens.size > 0 && (
                     <span className="text-sm text-purple-400">
-                      {selectedTokens.size} tokens selected (${selectedTokensValue.toFixed(2)})
+                      {selectedTokens.size} tokens selected (${selectedTokensValue.toLocaleString()})
                     </span>
                   )}
                 </div>
@@ -560,9 +560,9 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
                   <div className="text-sm text-gray-300">
                     {liquidationValue > 0 && (
                       <>
-                        <div>liquidating: <span className="text-green-400">${liquidationValue.toFixed(2)}</span></div>
-                        <div>remaining portfolio: <span className="text-blue-400">${remainingPortfolioValue.toFixed(2)}</span></div>
-                        <div>of selected: <span className="text-purple-400">{((liquidationValue / selectedTokensValue) * 100).toFixed(1)}%</span></div>
+                        <div>liquidating: <span className="text-green-400">${liquidationValue.toLocaleString()}</span></div>
+                        <div>remaining portfolio: <span className="text-blue-400">${remainingPortfolioValue.toLocaleString()}</span></div>
+                        <div>of selected: <span className="text-purple-400">{((liquidationValue / selectedTokensValue) * 100).toLocaleString()}%</span></div>
                       </>
                     )}
                   </div>
@@ -685,13 +685,13 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
                           </div>
                         </td>
                         <td className="text-right py-3 px-2 text-sm">
-                          {token.uiAmount < 0.0001 ? token.uiAmount.toExponential(2) : token.uiAmount.toFixed(6)}
+                          {token.uiAmount < 0.0001 ? token.uiAmount.toExponential(2) : token.uiAmount.toLocaleString()}
                         </td>
                         <td className="text-right py-3 px-2 text-sm">
-                          {token.price ? `$${token.price < 0.01 ? token.price.toExponential(2) : token.price.toFixed(2)}` : 'n/a'}
+                          {token.price ? `$${token.price < 0.01 ? token.price.toExponential(2) : token.price.toLocaleString()}` : 'n/a'}
                         </td>
                         <td className="text-right py-3 px-2 text-sm font-medium">
-                          ${(token.value || 0).toFixed(2)}
+                          ${(token.value || 0).toLocaleString()}
                         </td>
                         <td className="text-right py-3 px-2 text-sm">
                           <div className="flex items-center justify-end space-x-2">
@@ -701,12 +701,12 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
                                 style={{ width: `${Math.min(percentage, 100)}%` }}
                               />
                             </div>
-                            <span className="w-12 text-right">{percentage.toFixed(1)}%</span>
+                            <span className="w-12 text-right">{percentage.toLocaleString()}%</span>
                           </div>
                         </td>
                         {hasLiquidation && proRataToken && (
                           <td className="text-right py-3 px-2 text-sm text-green-400 font-medium">
-                            {proRataToken.swapAmount > 0.0001 ? proRataToken.swapAmount.toFixed(6) : proRataToken.swapAmount.toExponential(2)}
+                            {proRataToken.swapAmount > 0.0001 ? proRataToken.swapAmount.toLocaleString() : proRataToken.swapAmount.toExponential(2)}
                           </td>
                         )}
                       </tr>
@@ -722,9 +722,9 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
                 <div className="text-sm text-gray-300">
                   {hasLiquidation ? (
                     <>
-                      <span className="text-green-400">ready to swap ${liquidationValue.toFixed(2)} </span>
-                      <span>({((liquidationValue / selectedTokensValue) * 100).toFixed(1)}% of selected tokens)</span>
-                      <div className="mt-1 text-xs">remaining portfolio value: ${remainingPortfolioValue.toFixed(2)}</div>
+                      <span className="text-green-400">ready to swap ${liquidationValue.toLocaleString()} </span>
+                      <span>({((liquidationValue / selectedTokensValue) * 100).toLocaleString()}% of selected tokens)</span>
+                      <div className="mt-1 text-xs">remaining portfolio value: ${remainingPortfolioValue.toLocaleString()}</div>
                     </>
                   ) : (
                     'select tokens and enter a liquidation amount to generate swap quantities'

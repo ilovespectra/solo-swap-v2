@@ -87,6 +87,7 @@ Environment Configuration
 
 3. Create a .env.local file in the root directory:
     ```bash
+    NEXT_PUBLIC_HELIUS_API_KEY=heliusapikey
     NEXT_PUBLIC_RPC_ENDPOINT_1=https://your-quiknode-endpoint.com/your-api-key
     NEXT_PUBLIC_RPC_ENDPOINT_2=https://your-helius-endpoint.com/your-api-key
     ```

@@ -89,9 +89,7 @@ export function Providers({ children }: { children: ReactNode }) {
                 }
               }
               
-              /* Lowercase and mobile-friendly dropdown items */
               .wallet-adapter-dropdown-list-item {
-                text-transform: lowercase !important;
                 font-size: 0.875rem !important;
                 padding: 0.75rem 1rem !important;
                 min-height: 44px !important;
@@ -105,14 +103,12 @@ export function Providers({ children }: { children: ReactNode }) {
                 transform: translateX(2px) !important;
               }
               
-              /* Mobile-optimized wallet buttons */
               .wallet-adapter-button {
                 border-radius: 0.75rem !important;
                 font-size: 0.875rem !important;
                 min-height: 44px !important;
                 padding: 0.5rem 1rem !important;
                 transition: all 0.2s ease !important;
-                text-transform: lowercase !important;
               }
               
               .wallet-adapter-button:not([disabled]):hover {

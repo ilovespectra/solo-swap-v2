@@ -76,7 +76,7 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
   const { connection } = useConnection();
   const { publicKey } = useWallet();
   const [walletInput, setWalletInput] = useState('');
-  const [walletNickname, setWalletNickname] = useState('');
+  const [walletNickname, setWalletNickname] = useState<string>(''); 
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState<AnalysisResult[]>([]);
@@ -472,7 +472,7 @@ useEffect(() => {
       tokens: valuableTokens,
       totalValue,
       walletAddress,
-      nickname,
+      nickname: nickname || undefined,
       isDomain,
       analyzedAt: new Date()
     };

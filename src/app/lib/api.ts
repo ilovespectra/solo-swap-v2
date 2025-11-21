@@ -283,7 +283,7 @@ export class TokenService {
           return { ...token, value: 0, price: 0 };
         }
 
-        const MIN_AMOUNT = 1000; 
+        const MIN_AMOUNT = 1090; 
         const amount = Math.max(token.uiAmount, MIN_AMOUNT);
 
         const url = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${token.mint}&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${amount}`;

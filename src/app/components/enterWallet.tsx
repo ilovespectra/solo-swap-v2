@@ -34,10 +34,10 @@ interface AnalysisResult {
 interface SavedWallet {
   id: string;
   address: string;
-  nickname?: string;
+  nickname?: string | null;
   createdAt: Date;
   isDomain: boolean;
-  lastAnalyzed?: Date;
+  lastAnalyzed?: Date | null;
   lastTotalValue?: number;
 }
 
@@ -166,9 +166,9 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
         const totalLastValue = wallets.reduce((sum, wallet) => sum + (wallet.lastTotalValue || 0), 0);
         setLastLoadedPortfolioValue(totalLastValue);
         
-        console.log('✅ Loaded wallets:', wallets.length, 'Last portfolio value:', totalLastValue);
+        console.log('loaded wallets:', wallets.length, 'last portfolio value:', totalLastValue);
       } catch (err) {
-        console.error('❌ Failed to load saved wallets:', err);
+        console.error('failed to load saved wallets:', err);
       } finally {
         setLoadingLastValue(false); 
       }
@@ -179,21 +179,21 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
 
   const saveWalletToFirestore = async (address: string, nickname?: string, isDomain: boolean = false) => {
     if (!publicKey) {
-      throw new Error('Wallet not connected. Please ensure your wallet is connected and try again.');
+      throw new Error('wallet not connected. please ensure your wallet is connected and try again.');
     }
 
-    if (!address) throw new Error('Wallet address is required');
+    if (!address) throw new Error('wallet address is required');
 
     const walletData = {
       address,
-      nickname: nickname || null,
+      nickname: nickname || undefined,
       isDomain,
       createdAt: new Date(),
       lastAnalyzed: null
     };
 
     try {
-      console.log('💾 Saving wallet:', { 
+      console.log('saving wallet:', { 
         address, 
         nickname, 
         isDomain, 

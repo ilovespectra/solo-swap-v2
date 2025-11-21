@@ -96,7 +96,7 @@ export function PortfolioChart({ className = '' }: PortfolioChartProps) {
 
   const filterDataByTimeRange = (data: PortfolioHistory[]): PortfolioHistory[] => {
     const now = new Date();
-    let cutoffDate = new Date();
+    const cutoffDate = new Date();
 
     switch (timeRange) {
       case '7d':

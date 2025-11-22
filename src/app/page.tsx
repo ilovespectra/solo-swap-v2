@@ -10,7 +10,6 @@ import { SwapInterface } from './components/SwapInterface';
 import { SettingsPanel } from './components/SettingsPannel';
 import { MultisigAnalyzer } from './components/enterWallet';
 import { Settings2, Wallet, Menu, X, Calculator } from 'lucide-react';
-import { RpcStatus } from './components/RpcStatus';
 import Image from 'next/image';
 
 import '@solana/wallet-adapter-react-ui/styles.css';

@@ -1,4 +1,4 @@
-export type SortField = 'symbol' | 'balance' | 'USD' | 'value' | 'percentage' | 'source';
+export type SortField = 'symbol' | 'balance' | 'USD' | 'value' | 'percentage' | 'source' | 'performance';
 
 export interface ColumnConfig {
   id: string;

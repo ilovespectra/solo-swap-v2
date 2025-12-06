@@ -1,4 +1,5 @@
 export interface TokenBalance {
+  changePercent24h?: number | null;
   mint: string;
   symbol: string;
   name: string;
@@ -9,6 +10,7 @@ export interface TokenBalance {
   value: number;
   selected: boolean;
   logoURI?: string | null;
+  lastUpdated?: number;
 }
 
 export interface TokenInfo {

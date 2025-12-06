@@ -32,7 +32,6 @@ export class EncryptionService {
       
       return JSON.parse(decryptedString) as T;
     } catch (error) {
-      console.error('Decryption error:', error);
       return null;
     }
   }

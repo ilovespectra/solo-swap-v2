@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { TokenBalance, PriceProgress } from './types/token';
@@ -17,6 +17,7 @@ import { encryptionService } from './lib/encryption';
 import { HistoricalPortfolio } from './components/ViewHistory';
 import { SwapHistoryPanel } from './components/SwapHistoryPanel';
 import { useColumnState } from './hooks/useColumnState';
+import { ThemeToggle } from './components/ThemeToggle';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -40,6 +41,12 @@ export default function Home() {
   const [processingProgress, setProcessingProgress] = useState(0);
   const [totalToProcess, setTotalToProcess] = useState(0);
   const [currentPortfolioData, setCurrentPortfolioData] = useState<PortfolioHistory[]>([]);
+  const [updatedTokens, setUpdatedTokens] = useState<Set<string>>(new Set());
+  const subscriptionsSetup = useRef(false);
+  const lastHistoryUiUpdate = useRef<number>(0); // throttles UI history updates
+  const lastFirestoreWrite = useRef<number>(0);   // throttles Firestore writes
+  const isInitialLoad = useRef(true); // Track if we're in initial load
+  const priceUpdateBatch = useRef<Set<string>>(new Set()); // Track tokens updated in current batch
 
   const {
     columns,
@@ -114,8 +121,14 @@ const loadPortfolioHistory = useCallback(async () => {
             return null;
           }
 
+          const ts = data.timestamp instanceof Timestamp
+            ? data.timestamp.toDate()
+            : data.timestamp
+              ? new Date(data.timestamp)
+              : new Date();
+
           return {
-            timestamp: data.timestamp?.toDate() || new Date(),
+            timestamp: ts,
             totalValue: decryptedTotalValue,
             walletCount: decryptedWalletCount,
             tokenCount: decryptedTokenCount
@@ -126,7 +139,8 @@ const loadPortfolioHistory = useCallback(async () => {
         }
       })
       .filter(record => record !== null && record.totalValue > 0) as PortfolioHistory[];
-    setCurrentPortfolioData(history);
+    const sortedHistory = [...history].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    setCurrentPortfolioData(sortedHistory);
   } catch (err) {
     console.error('failed to load encrypted wallet history:', err);
   }
@@ -165,16 +179,20 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
 
     const historyRef = doc(collection(db, 'wallet-history', anonymizedKey, 'records'));
     await setDoc(historyRef, historyData);
-    
-    setCurrentPortfolioData(prev => {
-      const newHistory = [...prev, {
-        timestamp: historyData.timestamp.toDate(),
-        totalValue: totalValue,
-        walletCount: walletCount,
-        tokenCount: tokenCount
-      }];
-      return newHistory.slice(-100);
-    });
+
+    const now = Date.now();
+    if (now - lastHistoryUiUpdate.current > 30000) {
+      setCurrentPortfolioData(prev => [
+        ...prev,
+        {
+          timestamp: historyData.timestamp.toDate(),
+          totalValue: totalValue,
+          walletCount: walletCount,
+          tokenCount: tokenCount
+        }
+      ]);
+      lastHistoryUiUpdate.current = now;
+    }
 
   } catch (error) {
     console.error('failed to save encrypted wallet history:', error);
@@ -208,8 +226,10 @@ secureLog.info('portfolio history updated', {
   latestTimestamp: currentPortfolioData[currentPortfolioData.length - 1]?.timestamp
 });
     const tokenBalances = await tokenService.getTokenBalances(publicKey.toString());
+    console.log('[Page] Token balances fetched:', tokenBalances.length, 'tokens');
 
     const tokensWithBalance = tokenBalances.filter(token => token.uiAmount > 0);
+    console.log('[Page] Tokens with balance:', tokensWithBalance.length);
     setTotalToProcess(tokensWithBalance.length);
     
     const tokensWithPrices = await tokenService.getTokenPrices(
@@ -220,57 +240,70 @@ secureLog.info('portfolio history updated', {
       }
     );
 
+    console.log('[Page] Tokens with prices:', tokensWithPrices.length);
+    console.log('[Page] Setting tokens to state');
+
     setTokens(tokensWithPrices);
+    isInitialLoad.current = false; // Mark initial load complete
     
     const totalValue = tokensWithPrices.reduce((sum, token) => sum + (token.value || 0), 0);
     
-    if (totalValue > 0) {
+    const tokensWithValidPrices = tokensWithPrices.filter(t => t.price && t.price > 0).length;
+    if (totalValue > 0 && tokensWithValidPrices === tokensWithBalance.length) {
       await savePortfolioHistory(totalValue, 1, tokensWithPrices.length);
     }
     
   } catch (err) {
-    setError(err instanceof Error ? err.message : 'failed to fetch tokens');
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error('[Page] Error fetching tokens:', errorMsg);
+    setError(errorMsg);
   } finally {
     setLoading(false);
   }
 }, [publicKey, savePortfolioHistory]);
 
   const handleRefreshPrices = useCallback(async () => {
-    if (!publicKey || tokens.length === 0) return;
+  if (!publicKey || tokens.length === 0) return;
+  
+  setLoading(true);
+  setProcessingProgress(0);
+  setError('');
+  
+  try {
     
-    setLoading(true);
-    setProcessingProgress(0);
-    setError('');
+    const tokensWithPositiveBalance = tokens.filter(token => token.uiAmount > 0);
+    setTotalToProcess(tokensWithPositiveBalance.length);
     
-    try {
-      
-      const tokensWithPositiveBalance = tokens.filter(token => token.uiAmount > 0);
-      setTotalToProcess(tokensWithPositiveBalance.length);
-      
-      const refreshedTokens = await tokenService.getTokenPrices(
-        tokensWithPositiveBalance,
-        (progress: PriceProgress) => {
-          setProcessingProgress(progress.current);
-        }
-      );
-      
-      const updatedTokens = tokens.map(token => {
-        const refreshedToken = refreshedTokens.find(t => t.mint === token.mint);
-        return refreshedToken || token;
-      });
-      
-      setTokens(updatedTokens);
-      
-      const totalValue = updatedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+    const refreshedTokens = await tokenService.getTokenPrices(
+      tokensWithPositiveBalance,
+      (progress: PriceProgress) => {
+        setProcessingProgress(progress.current);
+      }
+    );
+    
+    const updatedTokens = tokens.map(token => {
+      const refreshedToken = refreshedTokens.find(t => t.mint === token.mint);
+      return refreshedToken || token;
+    });
+    
+    setTokens(updatedTokens);
+    
+    const totalValue = updatedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+    
+    const tokensWithValidPrices = updatedTokens.filter(t => t.price && t.price > 0).length;
+    const allTokensHavePrices = tokensWithValidPrices === tokensWithPositiveBalance.length;
+    
+    if (totalValue > 0 && allTokensHavePrices) {
       await savePortfolioHistory(totalValue, 1, updatedTokens.length);
-      
-    } catch (err) {
-      console.error('error refreshing prices:', err);
-      setError('failed to refresh prices');
-    } finally {
-      setLoading(false);
     }
-  }, [publicKey, tokens, savePortfolioHistory]);
+    
+  } catch (err) {
+    console.error('error refreshing prices:', err);
+    setError('failed to refresh prices');
+  } finally {
+    setLoading(false);
+  }
+}, [publicKey, tokens, tokenService, savePortfolioHistory]);
 
   useEffect(() => {
     if (connected) {
@@ -317,28 +350,109 @@ secureLog.info('portfolio history updated', {
   useEffect(() => {
   }, [processingProgress, totalToProcess, loading]);
 
+  const tokenMintsKey = useMemo(() => {
+    return tokens.map(t => t.mint).sort().join(',');
+  }, [tokens]);
+
+  useEffect(() => {
+    if (!publicKey || tokens.length === 0) {
+      subscriptionsSetup.current = false;
+      return;
+    }
+
+    if (subscriptionsSetup.current) {
+      return;
+    }
+    
+    console.log(`Setting up price subscriptions for ${tokens.length} tokens`);
+    subscriptionsSetup.current = true;
+    
+    const unsubscribeCallbacks: (() => void)[] = [];
+
+    tokens.forEach(token => {
+      const unsubscribe = tokenService.subscribeToPriceUpdates(token.mint, (updatedToken) => {
+        
+        setTokens(prev => {
+          const updatedTokens = prev.map(t => 
+            t.mint === updatedToken.mint 
+              ? { 
+                  ...t,
+                  symbol: t.symbol || updatedToken.symbol,
+                  name: t.name || updatedToken.name,
+                  logoURI: t.logoURI || updatedToken.logoURI,
+                  price: updatedToken.price || 0, 
+                  value: (updatedToken.price || 0) * t.uiAmount,
+                  changePercent24h: updatedToken.changePercent24h,
+                  lastUpdated: updatedToken.lastUpdated
+                }
+              : t
+          );
+          const newTotalValue = updatedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+          const tokensWithPrices = updatedTokens.filter(t => t.price && t.price > 0).length;
+          const allTokensHavePrices = tokensWithPrices === updatedTokens.length;
+          const now = Date.now();
+          if (now - lastFirestoreWrite.current > 30000 && allTokensHavePrices && newTotalValue > 0) {
+            lastFirestoreWrite.current = now;
+            savePortfolioHistory(newTotalValue, 1, updatedTokens.length).catch(err => 
+              console.error('Failed to save portfolio history during price update:', err)
+            );
+          }
+          return updatedTokens;
+        });
+        
+        setUpdatedTokens(prev => {
+          const newSet = new Set(prev);
+          newSet.add(updatedToken.mint);
+          return newSet;
+        });
+        
+        setTimeout(() => {
+          setUpdatedTokens(prev => {
+            const next = new Set(prev);
+            next.delete(updatedToken.mint);
+            return next;
+          });
+        }, 800);
+      });
+      
+      unsubscribeCallbacks.push(unsubscribe);
+    });
+
+    return () => {
+      console.log(`Cleaning up ${unsubscribeCallbacks.length} price subscriptions`);
+      unsubscribeCallbacks.forEach(unsubscribe => unsubscribe());
+      subscriptionsSetup.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey, tokenMintsKey]);
+
+  const memoPortfolioHistory = useMemo(() => currentPortfolioData, [currentPortfolioData]);
+
+  const livePortfolioValue = useMemo(() => {
+    return tokens.reduce((sum, token) => sum + (token.value || 0), 0);
+  }, [tokens]);
+
   const renderMainView = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8 relative z-10">
-      {/* Token Table */}
-      <div className="-mr-8 lg:col-span-2 order-2 lg:order-1">
-        <div className="bg-gray-800/50 rounded-xl p-4 sm:p-6 relative z-10">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 sm:gap-4 md:gap-8 relative z-10">
+      <div className="lg:col-span-2 order-2 lg:order-1 mb-0 sm:mb-0">
+        <div className="card p-4 sm:p-6 relative z-10">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 sm:mb-6 space-y-3 sm:space-y-0">
-            <h2 className="text-l sm:text-xl font-semibold flex items-center space-x-2">
+            <h2 className="text-l sm:text-xl font-semibold flex items-center space-x-2 text-orange-primary">
               <Wallet className="h-4 w-4 sm:h-5 sm:w-5 ml-3" />
-              <span></span>
+              <span>portfolio</span>
             </h2>
             
             <div className="flex items-center justify-between sm:justify-end space-x-2 sm:space-x-4">
               <div className="flex space-x-2">
                 <button
                   onClick={() => handleSelectAll(true)}
-                  className="text-s sm:text-l text-gray-400 hover:text-gray-300 transition-colors px-2 py-1"
+                  className="text-s sm:text-l text-secondary hover:text-primary transition-colors px-2 py-1 cursor-pointer"
                 >
                   select all
                 </button>
                 <button
                   onClick={() => handleSelectAll(false)}
-                  className="text-s sm:text-l text-gray-400 hover:text-gray-300 transition-colors px-2 py-1"
+                  className="text-s sm:text-l text-secondary hover:text-primary transition-colors px-2 py-1 cursor-pointer"
                 >
                   clear all
                 </button>
@@ -346,23 +460,23 @@ secureLog.info('portfolio history updated', {
               <button
                 onClick={fetchTokenBalances}
                 disabled={loading}
-                className="text-xs sm:text-l bg-gray-800 hover:bg-gray-700 px-2 sm:px-3 py-1 rounded transition-colors disabled:opacity-50 whitespace-nowrap mr-2"
+                className="btn-primary text-xs sm:text-l px-2 sm:px-3 py-1  disabled:opacity-50 whitespace-nowrap mr-2"
               >
                 {loading ? (
-                <div className="flex items-center space-x-2">
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                </div>
-              ) : (
-                <div className="flex items-center space-x-2">
-                  <RefreshCw className="h-4 w-4" />
-                </div>
-              )}
+                  <div className="flex items-center space-x-2">
+                    <span className="loading-dot-spinner" />
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <RefreshCw className="h-4 w-4" />
+                  </div>
+                )}
               </button>
             </div>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-500/20 border border-red-500 rounded-lg text-red-200 text-l">
+            <div className="mb-4 p-3  text-l" style={{ background: 'var(--orange-glow)', border: '1px solid var(--border-error)', color: 'var(--text-primary)' }}>
               {error}
             </div>
           )}
@@ -377,13 +491,15 @@ secureLog.info('portfolio history updated', {
             onRefreshPrices={handleRefreshPrices}
             processingProgress={processingProgress}
             totalToProcess={totalToProcess}
-            portfolioHistory={currentPortfolioData}
+            portfolioHistory={memoPortfolioHistory}
+            livePortfolioValue={livePortfolioValue}
             excludeTokenMint={selectedOutputToken}
+            updatedTokens={updatedTokens}
           />
         </div>
       </div>
 
-      <div className="lg:col-span-1 order-1 lg:order-2 mb-4 sm:mb-0">
+      <div className="lg:col-span-1 order-1 lg:order-2 mb-0 sm:mb-0">
         <div className="sticky top-4">
           <SwapInterface
             selectedTokens={selectedTokens}
@@ -398,147 +514,158 @@ secureLog.info('portfolio history updated', {
   );
 
   return (
-    <div className="w-screen max-w-screen overflow-x-hidden bg-gradient-to-br from-gray-1000 via-black to-black-1000 text-white relative">
-  <div className="w-full max-w-full overflow-x-hidden">
-    <div className="w-full max-w-full overflow-x-hidden">
-        <div className="mobile-content">
-          <header className="flex justify-between items-center mb-6 p-4 bg-gray-1000/30 border border-gray-700/50 shadow-lg relative z-40 w-screen max-w-screen overflow-x-hidden">
-            <div className="flex items-center space-x-3">
-              <div className="flex items-center space-x-3">
-                <div className="relative">
-                  <Image
-                    src={"/soloswap.png"}
-                    alt="soloswap logo"
-                    width={40}
-                    height={40}
-                    className="h-8 w-8 sm:h-10 sm:w-10 drop-shadow-lg"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-r from-gray-400 to-black-400 rounded-full opacity-20 blur-sm" />
-                </div>
-                <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-gray-300 via-black-300 to-gray-300 bg-clip-text text-transparent tracking-tight">
-                  solo:
-                </h1>
-              </div>
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)', width: '100vw', overflowX: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: '100%' }}>
+        <header className="card flex flex-col md:flex-row justify-between items-center mb-6 p-3 shadow-lg" style={{ background: 'var(--bg-secondary)', margin: 0, width: '100%', overflow: 'visible' }}>
+          {/* Logo and Title */}
+          <div className="flex items-center space-x-3 flex-shrink-0">
+            <div className="relative">
+              <Image
+                src={"/soloswap.png"}
+                alt="soloswap logo"
+                width={40}
+                height={40}
+                className="h-8 w-8 sm:h-10 sm:w-10 drop-shadow-lg"
+              />
+              <div className="absolute inset-0 opacity-20 blur-sm" style={{ background: 'linear-gradient(135deg, var(--orange-primary), var(--bg-primary))' }} />
             </div>
-            
-            <div className="hidden sm:flex items-center space-x-3">
-              {currentView === 'main' && (
-                <button
-                  onClick={() => setCurrentView('multisig')}
-                  className="flex items-center space-x-2 bg-gradient-to-r from-gray-800 to-black-600 hover:from-gray-500 hover:to-black-500 px-4 py-2.5 rounded-xl transition-all duration-200 text-l font-medium shadow-lg hover:shadow-gray-500/25 active:scale-95"
-                >
-                  <span>swap</span>
-                </button>
-              )}
-              
-              {currentView === 'multisig' && (
-                <button
-                  onClick={() => setCurrentView('main')}
-                  className="flex items-center space-x-2 bg-gradient-to-r from-gray-800 to-black-600 hover:from-gray-500 hover:to-black-500 px-4 py-2.5 rounded-xl transition-all duration-200 text-l font-medium shadow-lg hover:shadow-gray-500/25 active:scale-95"
-                >
-                  <span>shop</span>
-                </button>
-              )}
-
-              <div className="desktop-wallet-button">
-                {isClient && (
-                  <WalletMultiButton className="!bg-gradient-to-r !from-gray-800 !to-black-600 hover:!from-gray-500 hover:!to-black-500 !transition-all !duration-200 !text-sm !px-4 !py-2.5 !rounded-xl !font-medium !shadow-lg hover:!shadow-gray-500/25 active:!scale-95" />
-                )}
-              </div>
-            </div>
-
-            {/* Mobile buttons */}
-            <div className="sm:hidden flex items-center space-x-2">
-              {currentView === 'main' ? (
-                <button
-                  onClick={() => setCurrentView('multisig')}
-                  className="flex items-center space-x-2 bg-gradient-to-r from-black-800 to-gray-800 px-3 py-2 rounded-xl text-xs font-medium active:scale-95 transition-all duration-200"
-                >
-                  <span>swap</span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => setCurrentView('main')}
-                  className="flex items-center space-x-2 bg-gradient-to-r from-black-800 to-gray-800 px-3 py-2 rounded-xl text-xs font-medium active:scale-95 transition-all duration-200"
-                >
-                  <span>shop</span>
-                </button>
-              )}
-
-              <button
-                onClick={() => setShowMobileMenu(!showMobileMenu)}
-                className="p-2 bg-gray-700/50 hover:bg-gray-800/50 rounded-xl transition-all duration-200 active:scale-95 border border-gray-800"
-              >
-                {showMobileMenu ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-              </button>
-            </div>
-          </header>
-
-          {showMobileMenu && (
-            <div className="sm:hidden mb-6 p-5 bg-gray-800/50 border border-gray-700/50 shadow-lg animate-in fade-in duration-200 mobile-full-width">
-              <div className="flex flex-col space-y-4">
-                <div className="mobile-wallet-button flex justify-center">
-                  {isClient && (
-                    <WalletMultiButton className="!bg-gradient-to-r !from-gray-800 !to-black-600 hover:!from-gray-500 hover:!to-black-500 !transition-all !duration-200 !text-sm !py-3 !px-6 !rounded-xl !font-medium !w-full max-w-xs justify-center active:!scale-95" />
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-         <main className="mb-8 relative z-20 mobile-full-height -mx-4 sm:mx-0 px-4 sm:px-0">
-          <div className="mb-8 relative z-20 space-y-6 sm:mx-0">
-            {currentView === 'main' ? renderMainView() : (
-              <MultisigAnalyzer onBack={() => setCurrentView('main')} />
-            )}
+            <h1 className="text-xl sm:text-3xl font-bold text-orange-primary tracking-tight">
+              solo:
+            </h1>
           </div>
-        </main>
+          
+          {/* Desktop Navigation - Right Side */}
+          <nav className="hidden md:grid md:grid-cols-3 items-center flex-shrink-0" style={{ gap: '1rem', width: 'auto', overflow: 'visible' }}>
+            {currentView === 'main' && (
+              <button
+                onClick={() => setCurrentView('multisig')}
+                className="btn-primary text-sm font-medium whitespace-nowrap"
+                style={{ borderRadius: '0', height: '40px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem' }}
+              >
+                swap
+              </button>
+            )}
+            
+            {currentView === 'multisig' && (
+              <button
+                onClick={() => setCurrentView('main')}
+                className="btn-primary text-sm font-medium whitespace-nowrap"
+                style={{ borderRadius: '0', height: '40px', padding: '0 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem' }}
+              >
+                shop
+              </button>
+            )}
 
+            <div className="flex justify-center" style={{ marginRight: '2rem' }}>
+              <ThemeToggle />
+            </div>
+
+            <div className="wallet-button-wrapper" style={{ maxWidth: '140px', minHeight: '40px', pointerEvents: 'auto', position: 'relative', marginRight: '0.5rem' }}>
+              <WalletMultiButton />
+            </div>
+          </nav>
+
+          {/* Mobile Navigation */}
+          <div className="md:hidden grid grid-cols-3 items-center gap-2 flex-shrink-0">
+            {currentView === 'main' ? (
+              <button
+                onClick={() => setCurrentView('multisig')}
+                className="btn-primary px-3 py-2 text-xs font-medium whitespace-nowrap"
+                style={{ borderRadius: '0' }}
+              >
+                swap
+              </button>
+            ) : (
+              <button
+                onClick={() => setCurrentView('main')}
+                className="btn-primary px-3 py-2 text-xs font-medium whitespace-nowrap"
+                style={{ borderRadius: '0' }}
+              >
+                shop
+              </button>
+            )}
+
+            <div className="flex justify-center">
+              <ThemeToggle />
+            </div>
+
+            <button
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+              className="p-2 transition-all duration-300" 
+              style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', borderRadius: '0', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              {showMobileMenu ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </button>
+          </div>
+        </header>
+
+        {showMobileMenu && (
+          <div className="card mb-6 p-4 shadow-lg md:hidden">
+            <div className="flex flex-col space-y-4">
+              <div className="mobile-wallet-button w-full" style={{ pointerEvents: 'auto' }}>
+                <WalletMultiButton />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <main className="mb-8 px-0 sm:px-4 md:px-6" style={{ width: '100%' }}>
+          {currentView === 'main' ? renderMainView() : (
+            <MultisigAnalyzer onBack={() => setCurrentView('main')} />
+          )}
 
           {currentView === 'main' && (
-          <div className="mb-8 relative z-20 space-y-6 -mx-4 sm:mx-0">
-            <SwapHistoryPanel />
-            <HistoricalPortfolio />
-          </div>
+            <div className="mt-0 sm:mt-8 space-y-0 sm:space-y-6">
+              <SwapHistoryPanel />
+              <HistoricalPortfolio />
+            </div>
           )}
-          <footer className="mt-8 pt-6 border-t border-gray-700/30 relative z-20 mobile-full-width">
+        </main>
+
+        <footer className="mt-8 pt-6 px-0 sm:px-4 md:px-6" style={{ borderTop: '1px solid var(--border-primary)', width: '100%' }}>
             <div className="flex justify-center items-center space-x-8">
               <a
                 href="https://twitter.com/soloexplorerxyz"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group p-3 bg-gray-800/30 hover:bg-gray-700/50 rounded-xl transition-all duration-200 border border-gray-700/50 hover:border-gray-400/30 active:scale-95"
+                className="group p-3  transition-all duration-300 active:scale-95" 
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}
                 aria-label="Follow on Twitter"
               >
                 <svg 
-                  className="w-5 h-5 text-gray-400 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-200" 
+                  className="w-5 h-5 group-hover:scale-110 transition-all duration-300" 
+                  style={{ color: 'var(--text-secondary)' }}
                   fill="currentColor" 
                   viewBox="0 0 24 24"
                 >
-                  <path d="M8.29 20.251c7.547 0 11.675-6.253 11.675-11.675 0-.178 0-.355-.012-.53A8.348 8.348 0 0022 5.92a8.19 8.19 0 01-2.357.646 4.118 4.118 0 001.804-2.27 8.224 8.224 0 01-2.605.996 4.107 4.107 0 00-6.993 3.743 11.65 11.65 0 01-8.457-4.287 4.106 4.106 0 001.27 5.477A4.072 4.072 0 012.8 9.713v.052a4.105 4.105 0 003.292 4.022 4.095 4.095 0 01-1.853.07 4.108 4.108 0 003.834 2.85A8.233 8.233 0 012 18.407a11.616 11.616 0 006.29 1.84" />
+                  <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53A4.48 4.48 0 0 0 12.2 7.49v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z" />
                 </svg>
               </a>
-
+              
               <a
                 href="https://github.com/ilovespectra/solo-swap-v2"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group p-3 bg-gray-800/30 hover:bg-gray-700/50 rounded-xl transition-all duration-200 border border-gray-700/50 hover:border-gray-400/30 active:scale-95"
+                className="group p-3  transition-all duration-300 active:scale-95"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}
                 aria-label="View on GitHub"
               >
                 <svg 
-                  className="w-5 h-5 text-gray-400 group-hover:text-gray-400 group-hover:scale-110 transition-all duration-200" 
+                  className="w-5 h-5 group-hover:scale-110 transition-all duration-300" 
+                  style={{ color: 'var(--text-secondary)' }}
                   fill="currentColor" 
                   viewBox="0 0 24 24"
                 >
-                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.337-3.369-1.337-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.022.8-.223 1.65-.334 2.5-.338.85.004 1.7.115 2.5.338 1.91-1.291 2.75-1.022 2.75-1.022.544 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z" />
+                  <path 
+                    fillRule="evenodd" 
+                    clipRule="evenodd" 
+                    d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.838 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.033 1.531 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.22-.252-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.27.098-2.646 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.748-1.027 2.748-1.027.545 1.377.202 2.394.1 2.647.64.7 1.028 1.595 1.028 2.688 0 3.847-2.339 4.696-4.566 4.944.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z"
+                  />
                 </svg>
               </a>
             </div>
           </footer>
-        </div>
       </div>
     </div>
-  </div>
-);
+  );
 }

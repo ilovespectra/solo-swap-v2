@@ -492,9 +492,7 @@ secureLog.info('portfolio history updated', {
             processingProgress={processingProgress}
             totalToProcess={totalToProcess}
             portfolioHistory={memoPortfolioHistory}
-            livePortfolioValue={livePortfolioValue}
             excludeTokenMint={selectedOutputToken}
-            updatedTokens={updatedTokens}
           />
         </div>
       </div>

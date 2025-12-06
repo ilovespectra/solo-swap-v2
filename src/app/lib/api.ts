@@ -715,31 +715,6 @@ export class TokenService {
         lastUpdated: Date.now()
       }));
     }
-            result.name = name;
-            result.logoURI = logoURI;
-          }
-        }
-
-        if (onProgress) {
-          onProgress({
-            current: tokens.length,
-            total: tokens.length,
-            currentToken: 'complete'
-          });
-        }
-        
-        return allResults;
-      } else {
-        throw new Error('Invalid response from Helius API');
-      }
-    } catch (error) {
-      console.error('failed to fetch prices from Helius:', error);
-      return tokens.map(token => ({
-        ...token,
-        price: 0,
-        value: 0
-      }));
-    }
   }
 
   async retryFailedTokens(

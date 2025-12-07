@@ -9,7 +9,7 @@ export function ThemeToggle() {
   return (
     <button
       onClick={toggleTheme}
-      className="theme-toggle-btn p-2.5 transition-all duration-300 hover:scale-110 active:scale-95"
+      className="theme-toggle-btn p-2.5  transition-all duration-300 hover:scale-110 active:scale-95"
       aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
       style={{ touchAction: 'manipulation' }}
     >

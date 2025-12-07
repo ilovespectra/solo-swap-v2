@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -60,6 +60,39 @@ export function PortfolioChart({
   liveTokenCount,
   liveWalletCount}: PortfolioChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('1d');
+  const [valueUpdated, setValueUpdated] = useState(false);
+  const prevLiveValue = useRef<number | undefined>(undefined);
+
+  console.log('[HistoricalChart] Rendered with livePortfolioValue:', livePortfolioValue);
+
+  useEffect(() => {
+    if (livePortfolioValue !== undefined) {
+      // First render - just store the initial value
+      if (prevLiveValue.current === undefined) {
+        console.log('[HistoricalChart] Initial value set:', livePortfolioValue);
+        prevLiveValue.current = livePortfolioValue;
+        return;
+      }
+      
+      // Value changed - trigger animation
+      if (prevLiveValue.current !== livePortfolioValue) {
+        console.log('[HistoricalChart] Value updated:', prevLiveValue.current, '->', livePortfolioValue);
+        // Use setTimeout to avoid cascading render warning
+        const animationTimer = setTimeout(() => {
+          setValueUpdated(true);
+        }, 0);
+        const resetTimer = setTimeout(() => setValueUpdated(false), 800);
+        
+        // Update the ref for next comparison
+        prevLiveValue.current = livePortfolioValue;
+        
+        return () => {
+          clearTimeout(animationTimer);
+          clearTimeout(resetTimer);
+        };
+      }
+    }
+  }, [livePortfolioValue]);
 
   const filterDataByTimeRange = useCallback((data: PortfolioHistory[]): PortfolioHistory[] => {
     if (data.length === 0) return [];
@@ -145,15 +178,15 @@ export function PortfolioChart({
 
     if (performanceStats.isPositive) {
       return {
-        borderColor: 'rgb(34, 197, 94)',
-        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-        tooltipBorderColor: 'rgba(34, 197, 94, 0.5)'
+        borderColor: 'rgb(0, 255, 136)', // --green-primary
+        backgroundColor: 'rgba(0, 255, 136, 0.1)',
+        tooltipBorderColor: 'rgba(0, 255, 136, 0.5)'
       };
     } else {
       return {
-        borderColor: 'rgb(239, 68, 68)',
-        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-        tooltipBorderColor: 'rgba(239, 68, 68, 0.5)'
+        borderColor: 'rgb(217, 79, 31)', // --orange-dark
+        backgroundColor: 'rgba(217, 79, 31, 0.1)',
+        tooltipBorderColor: 'rgba(217, 79, 31, 0.5)'
       };
     }
   };
@@ -304,23 +337,27 @@ export function PortfolioChart({
   };
 
   return (
-    <div className={`bg-gray-900/50 rounded-xl p-6 border border-gray-700 ${className}`}>
+    <div className={`bg-secondary  p-6 border border-primary ${className}`}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 space-y-3 sm:space-y-0">
         <div className="flex items-center space-x-3">
-          <div className="p-2 bg-gray-500/20 rounded-lg">
-            <TrendingUp className="h-5 w-5 text-gray-400" />
+          <div className="p-2 bg-tertiary ">
+            <TrendingUp className="h-5 w-5 text-secondary" />
           </div>
         </div>
 
         <div className="flex items-center space-x-2">
           {/* Performance Stats */}
           {performanceStats && (
-            <div className={`px-3 py-1 rounded-lg ${
+            <div className={`px-3 py-1  ${
               performanceStats.isPositive 
-                ? 'bg-green-600/20 text-green-400' 
-                : 'bg-red-500/20 text-red-400'
-            }`}>
+                ? 'text-green-primary' 
+                : 'text-orange-dark'
+            }`} style={{
+              background: performanceStats.isPositive 
+                ? 'rgba(0, 255, 136, 0.1)' 
+                : 'rgba(217, 79, 31, 0.1)'
+            }}>
               <div className="text-l font-medium">
                 {performanceStats.isPositive ? '+' : ''}{performanceStats.percentageChange.toFixed(2)}%
               </div>
@@ -337,10 +374,10 @@ export function PortfolioChart({
           {portfolioHistory.length > 0 && (
             <button
               onClick={downloadChartData}
-              className="p-2 bg-gray-700 hover:bg-gray-600 rounded-m transition-colors"
+              className="p-2 bg-tertiary hover:bg-secondary  transition-colors"
               title="download csv"
             >
-              <Download className="h-4 w-4 text-gray-300" />
+              <Download className="h-4 w-4 text-secondary" />
             </button>
           )}
         </div>
@@ -352,10 +389,10 @@ export function PortfolioChart({
           <button
             key={range}
             onClick={() => setTimeRange(range)}
-            className={`px-1.5 py-0.5 text-xs rounded transition-colors flex-1 text-center min-w-0 ${
+            className={`px-1.5 py-0.5 text-xs  transition-colors flex-1 text-center min-w-0 ${
               timeRange === range
-                ? 'bg-gray-600 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                ? 'bg-tertiary text-primary'
+                : 'bg-secondary text-secondary hover:bg-tertiary'
             }`}
           >
             {range === '1d' ? '1d' : 
@@ -373,9 +410,9 @@ export function PortfolioChart({
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <Calendar className="h-12 w-12 text-gray-500 mx-auto mb-3" />
-              <p className="text-gray-400">no portfolio history available</p>
-              <p className="text-l text-gray-500 mt-1">
+              <Calendar className="h-12 w-12 text-tertiary mx-auto mb-3" />
+              <p className="text-secondary">no portfolio history available</p>
+              <p className="text-l text-tertiary mt-1">
                 analyze your portfolio to start tracking performance
               </p>
             </div>
@@ -385,27 +422,33 @@ export function PortfolioChart({
 
      {/* Summary Stats */}
     {(livePortfolioValue !== undefined || portfolioHistory.length > 0) && (
-      <div className="grid grid-cols-3 gap-2 md:gap-4 mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
+      <div className="grid grid-cols-3 gap-2 md:gap-4 mt-4 md:mt-6 pt-4 md:pt-6 border-t border-primary">
         <div className="text-center">
-          <div className="text-lg md:text-2xl font-bold text-green-500">
-            ${(livePortfolioValue !== undefined ? livePortfolioValue : portfolioHistory[portfolioHistory.length - 1]?.totalValue || 0).toLocaleString(undefined, { 
-              minimumFractionDigits: 2, 
-              maximumFractionDigits: 2 
-            })}
+          <div className={`text-lg md:text-2xl font-bold text-green-primary transition-all ${
+            valueUpdated ? 'price-updated' : ''
+          }`}>
+            ${(() => {
+              const displayValue = livePortfolioValue !== undefined ? livePortfolioValue : portfolioHistory[portfolioHistory.length - 1]?.totalValue || 0;
+              console.log('[HistoricalChart] Displaying value:', displayValue, 'from', livePortfolioValue !== undefined ? 'livePortfolioValue' : 'portfolioHistory');
+              return displayValue.toLocaleString(undefined, { 
+                minimumFractionDigits: 2, 
+                maximumFractionDigits: 2 
+              });
+            })()}
           </div>
-          <div className="text-xs md:text-sm text-gray-400">current value</div>
+          <div className="text-xs md:text-sm text-secondary">current value</div>
         </div>
         <div className="text-center">
-          <div className="text-lg md:text-2xl font-bold text-gray-400">
+          <div className="text-lg md:text-2xl font-bold text-secondary">
             {liveWalletCount !== undefined ? liveWalletCount : (portfolioHistory[portfolioHistory.length - 1]?.walletCount || 1)}
           </div>
-          <div className="text-xs md:text-sm text-gray-400">wallets</div>
+          <div className="text-xs md:text-sm text-secondary">wallets</div>
         </div>
         <div className="text-center">
-          <div className="text-lg md:text-2xl font-bold text-gray-400">
+          <div className="text-lg md:text-2xl font-bold text-secondary">
             {liveTokenCount !== undefined ? liveTokenCount : (portfolioHistory[portfolioHistory.length - 1]?.tokenCount || 0)}
           </div>
-          <div className="text-xs md:text-sm text-gray-400">tokens</div>
+          <div className="text-xs md:text-sm text-secondary">tokens</div>
         </div>
       </div>
     )}

@@ -174,14 +174,14 @@ export function SwapHistoryChart({
 
   const getMonochromeColors = (count: number) => {
     const colorPalette = [
-      'rgba(255, 255, 255, 0.9)',
-      'rgba(229, 231, 235, 0.9)',
-      'rgba(209, 213, 219, 0.9)',
-      'rgba(156, 163, 175, 0.9)',
-      'rgba(107, 114, 128, 0.9)',
-      'rgba(75, 85, 99, 0.9)',
-      'rgba(55, 65, 81, 0.9)',
-      'rgba(31, 41, 55, 0.9)',
+      'rgba(75, 85, 99, 0.95)',
+      'rgba(55, 65, 81, 0.95)',
+      'rgba(31, 41, 55, 0.95)',
+      'rgba(17, 24, 39, 0.95)',
+      'rgba(107, 114, 128, 0.95)',
+      'rgba(82, 82, 91, 0.95)',
+      'rgba(63, 63, 70, 0.95)',
+      'rgba(39, 39, 42, 0.95)',
     ];
 
     return colorPalette.slice(0, count);
@@ -194,8 +194,8 @@ export function SwapHistoryChart({
         datasets: [
           {
             data: [1],
-            backgroundColor: ['rgba(156, 163, 175, 0.9)'],
-            borderColor: 'rgba(0, 0, 0, 0.8)',
+            backgroundColor: ['rgba(55, 65, 81, 0.95)'],
+            borderColor: 'rgba(200, 200, 200, 0.5)',
             borderWidth: 2,
           },
         ],
@@ -221,7 +221,7 @@ export function SwapHistoryChart({
         {
           data,
           backgroundColor: getMonochromeColors(labels.length),
-          borderColor: 'rgba(0, 0, 0, 0.8)',
+          borderColor: 'rgba(200, 200, 200, 0.5)',
           borderWidth: 2,
           hoverBorderColor: 'rgba(255, 255, 255, 0.9)',
           hoverBorderWidth: 3,
@@ -308,10 +308,10 @@ export function SwapHistoryChart({
 
   if (isLoading) {
     return (
-      <div className="bg-black/90 border border-gray-700 rounded-none sm:rounded-xl overflow-hidden">
+      <div className="bg-black/90 border border-gray-700  sm: overflow-hidden">
         <div className="w-full p-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="p-2 bg-white/10 rounded-lg border border-gray-600">
+            <div className="p-2 bg-white/10  border border-gray-600">
               <Activity className="h-5 w-5 text-white" />
             </div>
             <div>
@@ -319,7 +319,9 @@ export function SwapHistoryChart({
               <p className="text-sm text-gray-300">Loading history...</p>
             </div>
           </div>
-          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+          <div className="h-5 w-5 text-white" style={{ color: 'white' }}>
+            <div className="circular-dot-spinner"></div>
+          </div>
         </div>
       </div>
     );
@@ -327,13 +329,13 @@ export function SwapHistoryChart({
 
   if (!sellIndicators || sellIndicators.length === 0) {
     return (
-      <div className="bg-black/90 border border-gray-700 rounded-none sm:rounded-xl overflow-hidden">
+      <div className="bg-black/90 border border-gray-700  sm: overflow-hidden">
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-800/30 transition-colors border-b border-gray-700"
         >
           <div className="flex items-center space-x-3">
-            <div className="p-2 bg-white/10 rounded-lg border border-gray-600">
+            <div className="p-2 bg-white/10  border border-gray-600">
               <Activity className="h-5 w-5 text-white" />
             </div>
             <div>
@@ -348,84 +350,84 @@ export function SwapHistoryChart({
   }
 
   return (
-    <div className="bg-black/90 border border-gray-700 rounded-none sm:rounded-xl overflow-hidden">
+    <div className="bg-primary border border-primary  sm: overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-800/30 transition-colors border-b border-gray-700"
+        className="w-full p-4 flex items-center justify-between text-left hover:bg-secondary transition-colors border-b border-primary"
       >
         <div className="flex items-center space-x-3">
-          <div className="p-2 bg-white/10 rounded-lg border border-gray-600">
-            <Activity className="h-5 w-5 text-white" />
+          <div className="p-2 bg-tertiary  border border-primary">
+            <Activity className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">transaction analytics</h3>
-            <p className="text-sm text-gray-300">
+            <h3 className="text-lg font-bold text-primary">transaction analytics</h3>
+            <p className="text-sm text-secondary">
               {combinedStats.totalTransactions} transactions • ${combinedStats.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
           </div>
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex space-x-1">
-            <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-            <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
-            <div className="w-2 h-2 bg-gray-600 rounded-full"></div>
+            <div className="w-2 h-2 bg-green-primary "></div>
+            <div className="w-2 h-2 text-orange-primary " style={{backgroundColor: 'var(--orange-primary)'}}></div>
+            <div className="w-2 h-2 bg-tertiary border border-primary "></div>
           </div>
-          <ChevronDown className={`h-5 w-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`h-5 w-5 text-tertiary transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
         </div>
       </button>
 
       {isExpanded && (
         <div className="p-4 space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-            <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-3 sm:p-4 hover:border-green-500/50 transition-colors">
+            <div className="bg-secondary border border-primary  sm: p-3 sm:p-4 hover:border-success transition-colors">
               <div className="flex items-center space-x-2 mb-2 sm:mb-3">
-                <Coins className="h-4 w-4 text-green-400" />
-                <span className="text-xs font-semibold text-gray-300 tracking-wide">pro-rata to usdc</span>
+                <Coins className="h-4 w-4 text-green-primary" />
+                <span className="text-xs font-semibold text-secondary tracking-wide">pro-rata to usdc</span>
               </div>
-              <div className="text-lg sm:text-xl font-bold text-green-400">
+              <div className="text-lg sm:text-xl font-bold text-green-primary">
                 ${combinedStats.totalLiquidated.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
               </div>
-              <div className="text-xs text-gray-400 mt-1">
+              <div className="text-xs text-tertiary mt-1">
                 {combinedStats.liquidationCount} liquidation{combinedStats.liquidationCount !== 1 ? 's' : ''}
               </div>
             </div>
 
             {/* Swapped Pro-rata */}
-            <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-3 sm:p-4 hover:border-blue-500/50 transition-colors">
+            <div className="bg-secondary border  sm: p-3 sm:p-4 transition-colors" style={{borderColor: 'var(--orange-primary)'}}>
               <div className="flex items-center space-x-2 mb-2 sm:mb-3">
-                <RefreshCw className="h-4 w-4 text-blue-400" />
-                <span className="text-xs font-semibold text-gray-300 tracking-wide">pro-rata to other</span>
+                <RefreshCw className="h-4 w-4" style={{color: 'var(--orange-primary)'}} />
+                <span className="text-xs font-semibold text-secondary tracking-wide">pro-rata to other</span>
               </div>
-              <div className="text-lg sm:text-xl font-bold text-blue-400">
+              <div className="text-lg sm:text-xl font-bold" style={{color: 'var(--orange-primary)'}}>
                 ${combinedStats.totalSwapped.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
               </div>
-              <div className="text-xs text-gray-400 mt-1">
+              <div className="text-xs text-tertiary mt-1">
                 {combinedStats.swapCount} swap{combinedStats.swapCount !== 1 ? 's' : ''}
               </div>
             </div>
 
-            <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-3 sm:p-4 hover:border-gray-500 transition-colors">
+            <div className="bg-secondary border border-primary  sm: p-3 sm:p-4 hover:border-primary transition-colors">
               <div className="flex items-center space-x-2 mb-2 sm:mb-3">
-                <ArrowRightLeft className="h-4 w-4 text-white" />
-                <span className="text-xs font-semibold text-gray-300 tracking-wide">total txs</span>
+                <ArrowRightLeft className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-secondary tracking-wide">total txs</span>
               </div>
-              <div className="text-lg sm:text-xl font-bold text-white">
+              <div className="text-lg sm:text-xl font-bold text-primary">
                 {combinedStats.totalTransactions}
               </div>
             </div>
 
-            <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-3 sm:p-4 hover:border-gray-500 transition-colors">
+            <div className="bg-secondary border border-primary  sm: p-3 sm:p-4 hover:border-primary transition-colors">
               <div className="flex items-center space-x-2 mb-2 sm:mb-3">
-                <Calendar className="h-4 w-4 text-white" />
-                <span className="text-xs font-semibold text-gray-300 tracking-wide">active days</span>
+                <Calendar className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-secondary tracking-wide">active days</span>
               </div>
-              <div className="text-lg sm:text-xl font-bold text-white">
+              <div className="text-lg sm:text-xl font-bold text-primary">
                 {Math.max(liquidationStats.daysWithLiquidations, swapStats.daysWithSwaps)}
               </div>
             </div>
@@ -434,18 +436,18 @@ export function SwapHistoryChart({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
             {/* Liquidation Pie Chart */}
             {liquidationStats.liquidationCount > 0 && (
-              <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-4 sm:p-6 hover:border-green-500/30 transition-colors">
+              <div className="bg-secondary border border-primary  sm: p-4 sm:p-6 hover:border-success transition-colors">
                 <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-green-500/20 rounded-lg border border-green-500/30">
-                    <Coins className="h-5 w-5 text-green-400" />
+                  <div className="p-2  border border-success" style={{backgroundColor: 'rgba(0, 255, 136, 0.1)'}}>
+                    <Coins className="h-5 w-5 text-green-primary" />
                   </div>
-                  <h3 className="text-base font-bold text-white">pro-rata to usdc</h3>
+                  <h3 className="text-base font-bold text-primary">pro-rata to usdc</h3>
                 </div>
                 <div className="h-64">
                   <Pie data={liquidationPieData} options={pieChartOptions} />
                 </div>
                 <div className="mt-3 text-center">
-                  <span className="text-xs font-medium text-gray-400 bg-gray-800 px-3 py-1 rounded-full border border-gray-600">
+                  <span className="text-xs font-medium text-tertiary bg-tertiary px-3 py-1  border border-primary">
                     {liquidationStats.liquidationCount} token{liquidationStats.liquidationCount !== 1 ? 's' : ''} liquidated to USDC
                   </span>
                 </div>
@@ -454,18 +456,18 @@ export function SwapHistoryChart({
 
             {/* Pro-rata Swap Pie Chart */}
             {swapStats.swapCount > 0 && (
-              <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-4 sm:p-6 hover:border-blue-500/30 transition-colors">
+              <div className="bg-secondary border border-primary  sm: p-4 sm:p-6 transition-colors" style={{borderColor: 'var(--orange-primary)'}}>
                 <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-blue-500/20 rounded-lg border border-blue-500/30">
-                    <RefreshCw className="h-5 w-5 text-blue-400" />
+                  <div className="p-2  border" style={{backgroundColor: 'rgba(255, 107, 53, 0.1)', borderColor: 'var(--orange-primary)'}}>
+                    <RefreshCw className="h-5 w-5" style={{color: 'var(--orange-primary)'}} />
                   </div>
-                  <h3 className="text-base font-bold text-white">pro-rata to other</h3>
+                  <h3 className="text-base font-bold text-primary">pro-rata to other</h3>
                 </div>
                 <div className="h-64">
                   <Pie data={swapPieData} options={pieChartOptions} />
                 </div>
                 <div className="mt-3 text-center">
-                  <span className="text-xs font-medium text-gray-400 bg-gray-800 px-3 py-1 rounded-full border border-gray-600">
+                  <span className="text-xs font-medium text-tertiary bg-tertiary px-3 py-1  border border-primary">
                     {swapStats.swapCount} token{swapStats.swapCount !== 1 ? 's' : ''} swapped pro-rata
                   </span>
                 </div>
@@ -477,12 +479,12 @@ export function SwapHistoryChart({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
             {/* Recent Liquidations */}
             {liquidations.length > 0 && (
-              <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-4 sm:p-6 hover:border-green-500/30 transition-colors">
+              <div className="bg-secondary border border-primary  sm: p-4 sm:p-6 hover:border-success transition-colors">
                 <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-green-500/20 rounded-lg border border-green-500/30">
-                    <Flame className="h-5 w-5 text-green-400" />
+                  <div className="p-2  border border-success" style={{backgroundColor: 'rgba(0, 255, 136, 0.1)'}}>
+                    <Flame className="h-5 w-5 text-green-primary" />
                   </div>
-                  <h3 className="text-base font-bold text-white">recent liquidations to usdc</h3>
+                  <h3 className="text-base font-bold text-primary">recent liquidations to usdc</h3>
                 </div>
                 <div className="space-y-3 max-h-64 overflow-y-auto">
                   {liquidations
@@ -491,27 +493,27 @@ export function SwapHistoryChart({
                     .map((indicator, index) => (
                       <div
                         key={index}
-                        className="flex items-center justify-between p-3 sm:p-4 bg-gray-800/50 rounded-lg border border-green-500/20 hover:border-green-400/40 transition-all duration-200 hover:bg-gray-700/30"
+                        className="flex items-center justify-between p-3 sm:p-4 bg-tertiary  border border-success hover:bg-secondary transition-all duration-300"
                       >
                         <div className="flex items-center space-x-3">
-                          <div className="w-3 h-3 bg-green-400 rounded-full"></div>
+                          <div className="w-3 h-3 bg-green-primary "></div>
                           <div>
-                            <div className="text-sm font-semibold text-white lowercase">
+                            <div className="text-sm font-semibold text-primary lowercase">
                               {indicator.token}
                             </div>
-                            <div className="text-xs text-gray-300 lowercase">
+                            <div className="text-xs text-secondary lowercase">
                               {formatDate(indicator.timestamp)}
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-sm font-bold text-green-400">
+                          <div className="text-sm font-bold text-green-primary">
                             ${indicator.valueUsd.toLocaleString(undefined, {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
                           </div>
-                          <div className="text-xs text-green-300/70">to USDC</div>
+                          <div className="text-xs text-green-secondary">to USDC</div>
                         </div>
                       </div>
                     ))}
@@ -521,12 +523,12 @@ export function SwapHistoryChart({
 
             {/* Recent Pro-rata Swaps */}
             {proRataSwaps.length > 0 && (
-              <div className="bg-gray-900 border border-gray-700 rounded-lg sm:rounded-xl p-4 sm:p-6 hover:border-blue-500/30 transition-colors">
+              <div className="bg-secondary border  sm: p-4 sm:p-6 transition-colors" style={{borderColor: 'var(--orange-primary)'}}>
                 <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-blue-500/20 rounded-lg border border-blue-500/30">
-                    <RefreshCw className="h-5 w-5 text-blue-400" />
+                  <div className="p-2  border" style={{backgroundColor: 'rgba(255, 107, 53, 0.1)', borderColor: 'var(--orange-primary)'}}>
+                    <RefreshCw className="h-5 w-5" style={{color: 'var(--orange-primary)'}} />
                   </div>
-                  <h3 className="text-base font-bold text-white">recent pro-rata swaps</h3>
+                  <h3 className="text-base font-bold text-primary">recent pro-rata swaps</h3>
                 </div>
                 <div className="space-y-3 max-h-64 overflow-y-auto">
                   {proRataSwaps
@@ -535,27 +537,28 @@ export function SwapHistoryChart({
                     .map((indicator, index) => (
                       <div
                         key={index}
-                        className="flex items-center justify-between p-3 sm:p-4 bg-gray-800/50 rounded-lg border border-blue-500/20 hover:border-blue-400/40 transition-all duration-200 hover:bg-gray-700/30"
+                        className="flex items-center justify-between p-3 sm:p-4 bg-tertiary  border hover:bg-secondary transition-all duration-300"
+                        style={{borderColor: 'var(--orange-primary)'}}
                       >
                         <div className="flex items-center space-x-3">
-                          <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
+                          <div className="w-3 h-3 " style={{backgroundColor: 'var(--orange-primary)'}}></div>
                           <div>
-                            <div className="text-sm font-semibold text-white lowercase">
+                            <div className="text-sm font-semibold text-primary lowercase">
                               {indicator.token}
                             </div>
-                            <div className="text-xs text-gray-300 lowercase">
+                            <div className="text-xs text-secondary lowercase">
                               {formatDate(indicator.timestamp)}
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-sm font-bold text-blue-400">
+                          <div className="text-sm font-bold" style={{color: 'var(--orange-primary)'}}>
                             ${indicator.valueUsd.toLocaleString(undefined, {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
                           </div>
-                          <div className="text-xs text-blue-300/70">pro-rata</div>
+                          <div className="text-xs" style={{color: 'var(--orange-secondary)'}}>pro-rata</div>
                         </div>
                       </div>
                     ))}

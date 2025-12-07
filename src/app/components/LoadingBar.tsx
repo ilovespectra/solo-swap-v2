@@ -19,75 +19,68 @@ export function LoadingBar({
   totalItems, 
   currentProcessed, 
   itemType = 'tokens',
-  durationPerItem = 3000,
+  durationPerItem = 500,
   className = '' 
 }: LoadingBarProps) {
-  const [progress, setProgress] = useState(0);
-  const [timeRemaining, setTimeRemaining] = useState(0);
   const startTimeRef = useRef<number | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
+  const lastUpdateTimeRef = useRef<number>(0);
   const previousProcessedRef = useRef<number>(0);
+  const [timeRemaining, setTimeRemaining] = useState(0);
+
+  const progress = totalItems > 0 ? Math.min((currentProcessed / totalItems) * 100, 100) : 0;
 
   useEffect(() => {
-    if (totalItems === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setProgress(0);
-      setTimeRemaining(0);
-      return;
-    }
-
-    if (!startTimeRef.current || previousProcessedRef.current === 0) {
-      startTimeRef.current = Date.now();
-      previousProcessedRef.current = currentProcessed;
-    }
-
-    const updateProgress = () => {
-      if (!startTimeRef.current) return;
-
-      const currentTime = Date.now();
-      const elapsed = currentTime - startTimeRef.current;
-      
-      const actualProgress = totalItems > 0 ? (currentProcessed / totalItems) * 100 : 0;
-      
-      const totalDuration = totalItems * durationPerItem;
-      const timeBasedProgress = totalDuration > 0 ? Math.min((elapsed / totalDuration) * 100, 100) : 0;
-      
-      const displayProgress = Math.min(Math.max(actualProgress, timeBasedProgress), 100);
-      setProgress(displayProgress);
-
-      if (actualProgress > 0 && actualProgress < 100) {
-        const estimatedTotalTime = (elapsed / actualProgress) * 100;
-        const remaining = Math.max(0, estimatedTotalTime - elapsed);
-        setTimeRemaining(remaining);
-      } else {
-        setTimeRemaining(0);
+    const updateTime = () => {
+      if (lastUpdateTimeRef.current === 0) {
+        lastUpdateTimeRef.current = Date.now();
       }
 
-      if (displayProgress < 100 && currentProcessed < totalItems) {
-        animationFrameRef.current = requestAnimationFrame(updateProgress);
-      } else {
-        if (currentProcessed >= totalItems) {
-          setProgress(100);
+      if (totalItems === 0 || currentProcessed === 0) {
+        startTimeRef.current = null;
+        previousProcessedRef.current = 0;
+        setTimeRemaining(0);
+        return;
+      }
+
+      if (!startTimeRef.current) {
+        startTimeRef.current = Date.now();
+        previousProcessedRef.current = currentProcessed;
+        lastUpdateTimeRef.current = Date.now();
+      }
+
+      if (currentProcessed > previousProcessedRef.current && startTimeRef.current) {
+        const now = Date.now();
+        const elapsed = now - startTimeRef.current;
+        const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
+        
+        if (timeSinceLastUpdate > 5000 && currentProcessed > 0) {
+          startTimeRef.current = now - (durationPerItem * currentProcessed);
+        }
+
+        const itemsProcessed = currentProcessed;
+        const itemsRemaining = totalItems - currentProcessed;
+
+        if (itemsProcessed > 0 && itemsRemaining > 0) {
+          const avgTimePerItem = elapsed / itemsProcessed;
+          setTimeRemaining(avgTimePerItem * itemsRemaining);
+        } else {
           setTimeRemaining(0);
         }
+
+        previousProcessedRef.current = currentProcessed;
+        lastUpdateTimeRef.current = now;
+      }
+
+      if (currentProcessed >= totalItems) {
+        setTimeRemaining(0);
       }
     };
 
-    animationFrameRef.current = requestAnimationFrame(updateProgress);
-
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
+    updateTime();
   }, [totalItems, currentProcessed, durationPerItem]);
-  useEffect(() => {
-    if (currentProcessed !== previousProcessedRef.current) {
-      previousProcessedRef.current = currentProcessed;
-    }
-  }, [currentProcessed, totalItems]);
 
   const formatTimeRemaining = (ms: number): string => {
+    if (ms <= 0) return '0s';
     const seconds = Math.ceil(ms / 1000);
     if (seconds < 60) {
       return `${seconds}s`;
@@ -98,7 +91,8 @@ export function LoadingBar({
   };
 
   const itemsRemaining = totalItems - currentProcessed;
-  const isComplete = progress >= 100 || (totalItems > 0 && currentProcessed >= totalItems);
+  const isComplete = currentProcessed >= totalItems && totalItems > 0;
+  const isStarted = currentProcessed > 0;
 
   return (
     <div className={`w-full ${className}`}>
@@ -107,16 +101,16 @@ export function LoadingBar({
           {totalItems} {itemType} detected
         </span>
         <span className="text-sm text-gray-400">
-          {isComplete ? 'complete!' : timeRemaining > 0 ? `${formatTimeRemaining(timeRemaining)} remaining` : 'starting...'}
+          {isComplete ? 'complete!' : isStarted && timeRemaining > 0 ? `${formatTimeRemaining(timeRemaining)} remaining` : 'starting...'}
         </span>
       </div>
 
-      <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+      <div className="w-full bg-gray-700 h-3 overflow-hidden">
         <div 
-          className="h-full bg-gradient-to-r from-gray-500 to-gray-200 rounded-full transition-all duration-300 ease-out relative"
+          className="h-full bg-gradient-to-r from-gray-500 to-gray-200 transition-all duration-500 ease-out relative"
           style={{ width: `${progress}%` }}
         >
-          {!isComplete && (
+          {!isComplete && isStarted && (
             <div 
               className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent"
               style={{
@@ -136,13 +130,13 @@ export function LoadingBar({
         </span>
       </div>
 
-      {itemsRemaining > 0 && !isComplete && (
+      {itemsRemaining > 0 && !isComplete && isStarted && (
         <div className="flex items-center justify-center mt-3 space-x-2">
           <div className="flex space-x-1">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"
+                className="w-2 h-2 bg-gray-400 animate-pulse"
                 style={{ animationDelay: `${i * 0.2}s` }}
               />
             ))}

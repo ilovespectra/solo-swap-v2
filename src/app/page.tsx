@@ -42,11 +42,9 @@ export default function Home() {
   const [totalToProcess, setTotalToProcess] = useState(0);
   const [currentPortfolioData, setCurrentPortfolioData] = useState<PortfolioHistory[]>([]);
   const [updatedTokens, setUpdatedTokens] = useState<Set<string>>(new Set());
-  const subscriptionsSetup = useRef(false);
   const lastHistoryUiUpdate = useRef<number>(0); // throttles UI history updates
   const lastFirestoreWrite = useRef<number>(0);   // throttles Firestore writes
   const isInitialLoad = useRef(true); // Track if we're in initial load
-  const priceUpdateBatch = useRef<Set<string>>(new Set()); // Track tokens updated in current batch
 
   const {
     columns,
@@ -216,15 +214,6 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
   setTotalToProcess(0);
   
   try {
-    secureLog.wallet('fetching token balances', publicKey?.toString(), {
-  tokenCount: tokens.length,
-  totalValue: totalSelectedValue
-});
-
-secureLog.info('portfolio history updated', {
-  recordCount: currentPortfolioData.length,
-  latestTimestamp: currentPortfolioData[currentPortfolioData.length - 1]?.timestamp
-});
     const tokenBalances = await tokenService.getTokenBalances(publicKey.toString());
     console.log('[Page] Token balances fetched:', tokenBalances.length, 'tokens');
 
@@ -241,15 +230,16 @@ secureLog.info('portfolio history updated', {
     );
 
     console.log('[Page] Tokens with prices:', tokensWithPrices.length);
-    console.log('[Page] Setting tokens to state');
+    console.log('[Page] Token prices sample:', tokensWithPrices.slice(0, 3).map(t => ({ mint: t.mint, price: t.price, value: t.value })));
 
     setTokens(tokensWithPrices);
-    isInitialLoad.current = false; // Mark initial load complete
+    isInitialLoad.current = false;
     
     const totalValue = tokensWithPrices.reduce((sum, token) => sum + (token.value || 0), 0);
+    console.log('[Page] Total portfolio value:', totalValue);
     
-    const tokensWithValidPrices = tokensWithPrices.filter(t => t.price && t.price > 0).length;
-    if (totalValue > 0 && tokensWithValidPrices === tokensWithBalance.length) {
+    // Save history if we have a total value (don't require all prices)
+    if (totalValue > 0) {
       await savePortfolioHistory(totalValue, 1, tokensWithPrices.length);
     }
     
@@ -260,7 +250,7 @@ secureLog.info('portfolio history updated', {
   } finally {
     setLoading(false);
   }
-}, [publicKey, savePortfolioHistory]);
+}, [publicKey, tokenService, savePortfolioHistory]);
 
   const handleRefreshPrices = useCallback(async () => {
   if (!publicKey || tokens.length === 0) return;
@@ -270,7 +260,6 @@ secureLog.info('portfolio history updated', {
   setError('');
   
   try {
-    
     const tokensWithPositiveBalance = tokens.filter(token => token.uiAmount > 0);
     setTotalToProcess(tokensWithPositiveBalance.length);
     
@@ -281,20 +270,33 @@ secureLog.info('portfolio history updated', {
       }
     );
     
-    const updatedTokens = tokens.map(token => {
+    // Create new tokens array
+    const newTokens = tokens.map(token => {
       const refreshedToken = refreshedTokens.find(t => t.mint === token.mint);
       return refreshedToken || token;
     });
     
-    setTokens(updatedTokens);
+    // Track which tokens were updated for animation
+    const mints = new Set<string>();
+    refreshedTokens.forEach(token => {
+      const oldToken = tokens.find(t => t.mint === token.mint);
+      if (oldToken && oldToken.price !== token.price) {
+        mints.add(token.mint);
+      }
+    });
     
-    const totalValue = updatedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+    setTokens(newTokens);
+    setUpdatedTokens(mints);
     
-    const tokensWithValidPrices = updatedTokens.filter(t => t.price && t.price > 0).length;
-    const allTokensHavePrices = tokensWithValidPrices === tokensWithPositiveBalance.length;
+    // Clear animation after it plays
+    setTimeout(() => {
+      setUpdatedTokens(new Set());
+    }, 800);
     
-    if (totalValue > 0 && allTokensHavePrices) {
-      await savePortfolioHistory(totalValue, 1, updatedTokens.length);
+    const totalValue = newTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+    
+    if (totalValue > 0) {
+      await savePortfolioHistory(totalValue, 1, newTokens.length);
     }
     
   } catch (err) {
@@ -343,88 +345,6 @@ secureLog.info('portfolio history updated', {
   useEffect(() => {
     setIsClient(true);
   }, []);
-
-  useEffect(() => {
-  }, [selectedTokens, totalSelectedValue]);
-
-  useEffect(() => {
-  }, [processingProgress, totalToProcess, loading]);
-
-  const tokenMintsKey = useMemo(() => {
-    return tokens.map(t => t.mint).sort().join(',');
-  }, [tokens]);
-
-  useEffect(() => {
-    if (!publicKey || tokens.length === 0) {
-      subscriptionsSetup.current = false;
-      return;
-    }
-
-    if (subscriptionsSetup.current) {
-      return;
-    }
-    
-    console.log(`Setting up price subscriptions for ${tokens.length} tokens`);
-    subscriptionsSetup.current = true;
-    
-    const unsubscribeCallbacks: (() => void)[] = [];
-
-    tokens.forEach(token => {
-      const unsubscribe = tokenService.subscribeToPriceUpdates(token.mint, (updatedToken) => {
-        
-        setTokens(prev => {
-          const updatedTokens = prev.map(t => 
-            t.mint === updatedToken.mint 
-              ? { 
-                  ...t,
-                  symbol: t.symbol || updatedToken.symbol,
-                  name: t.name || updatedToken.name,
-                  logoURI: t.logoURI || updatedToken.logoURI,
-                  price: updatedToken.price || 0, 
-                  value: (updatedToken.price || 0) * t.uiAmount,
-                  changePercent24h: updatedToken.changePercent24h,
-                  lastUpdated: updatedToken.lastUpdated
-                }
-              : t
-          );
-          const newTotalValue = updatedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
-          const tokensWithPrices = updatedTokens.filter(t => t.price && t.price > 0).length;
-          const allTokensHavePrices = tokensWithPrices === updatedTokens.length;
-          const now = Date.now();
-          if (now - lastFirestoreWrite.current > 30000 && allTokensHavePrices && newTotalValue > 0) {
-            lastFirestoreWrite.current = now;
-            savePortfolioHistory(newTotalValue, 1, updatedTokens.length).catch(err => 
-              console.error('Failed to save portfolio history during price update:', err)
-            );
-          }
-          return updatedTokens;
-        });
-        
-        setUpdatedTokens(prev => {
-          const newSet = new Set(prev);
-          newSet.add(updatedToken.mint);
-          return newSet;
-        });
-        
-        setTimeout(() => {
-          setUpdatedTokens(prev => {
-            const next = new Set(prev);
-            next.delete(updatedToken.mint);
-            return next;
-          });
-        }, 800);
-      });
-      
-      unsubscribeCallbacks.push(unsubscribe);
-    });
-
-    return () => {
-      console.log(`Cleaning up ${unsubscribeCallbacks.length} price subscriptions`);
-      unsubscribeCallbacks.forEach(unsubscribe => unsubscribe());
-      subscriptionsSetup.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey, tokenMintsKey]);
 
   const memoPortfolioHistory = useMemo(() => currentPortfolioData, [currentPortfolioData]);
 
@@ -482,18 +402,19 @@ secureLog.info('portfolio history updated', {
           )}
 
           <TokenTable
-            tokens={tokens}
-            loading={loading}
-            onTokenSelect={handleTokenSelect}
-            onSelectAll={handleSelectAll}
-            selectedTokens={selectedTokens}
-            totalSelectedValue={totalSelectedValue}
-            onRefreshPrices={handleRefreshPrices}
-            processingProgress={processingProgress}
-            totalToProcess={totalToProcess}
-            portfolioHistory={memoPortfolioHistory}
-            excludeTokenMint={selectedOutputToken}
-          />
+          tokens={tokens}
+          loading={loading}
+          onTokenSelect={handleTokenSelect}
+          onSelectAll={handleSelectAll}
+          selectedTokens={selectedTokens}
+          totalSelectedValue={totalSelectedValue}
+          onRefreshPrices={handleRefreshPrices}
+          processingProgress={processingProgress}
+          totalToProcess={totalToProcess}
+          portfolioHistory={memoPortfolioHistory}
+          excludeTokenMint={selectedOutputToken}
+          updatedTokens={updatedTokens}
+        />
         </div>
       </div>
 

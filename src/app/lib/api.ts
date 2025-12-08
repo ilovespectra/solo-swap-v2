@@ -5,6 +5,9 @@ const HELIUS_RPC_URL = process.env.NEXT_PUBLIC_HELIUS_API_KEY
   ? `https://mainnet.helius-rpc.com/?api-key=${process.env.NEXT_PUBLIC_HELIUS_API_KEY}`
   : 'https://mainnet.helius-rpc.com/';
 
+const DEFAULT_FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
+const RPC_FALLBACK_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_FALLBACK?.trim() || DEFAULT_FALLBACK_RPC;
+
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -80,6 +83,7 @@ export class TokenService {
   private batchUpdateInterval: NodeJS.Timeout | null = null;
   private animationInterval: NodeJS.Timeout | null = null;
   private pendingPriceRequests: Map<string, Promise<{ price: number; changePercent24h?: number } | null>> = new Map();
+  private rpcEndpoints: string[] = [HELIUS_RPC_URL, RPC_FALLBACK_URL].filter(Boolean) as string[];
 
   private constructor() {
     this.loadTokenList();
@@ -93,11 +97,41 @@ export class TokenService {
   }
 
   private createConnection(): Connection {
-    return new Connection(HELIUS_RPC_URL, 'confirmed');
+    const endpoint = this.rpcEndpoints[0] || HELIUS_RPC_URL;
+    return new Connection(endpoint, 'confirmed');
   }
 
   public getConnection(): Connection {
     return this.createConnection();
+  }
+
+  private isRateLimitError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const err = error as { code?: number; message?: string };
+    const msg = (err.message || '').toLowerCase();
+    return err.code === -32429 || msg.includes('rate') || msg.includes('429') || msg.includes('max usage');
+  }
+
+  private async rpcWithFallback<T>(fn: (connection: Connection) => Promise<T>): Promise<T> {
+    let lastError: unknown;
+    const endpoints = this.rpcEndpoints.length > 0 ? this.rpcEndpoints : [HELIUS_RPC_URL];
+
+    for (let i = 0; i < endpoints.length; i++) {
+      const connection = new Connection(endpoints[i], 'confirmed');
+      try {
+        return await fn(connection);
+      } catch (error) {
+        lastError = error;
+        const isRateLimited = this.isRateLimitError(error);
+        const hasNext = i < endpoints.length - 1;
+        if (!isRateLimited || !hasNext) {
+          throw error;
+        }
+        await new Promise((res) => setTimeout(res, 400 + i * 300));
+      }
+    }
+
+    throw lastError ?? new Error('RPC request failed');
   }
 
   private async loadTokenList(): Promise<void> {
@@ -475,16 +509,17 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
   async getTokenBalances(walletAddress: string): Promise<TokenBalance[]> {
     await this.ensureTokenListLoaded();
 
-    const connection = this.createConnection();
     const publicKey = new PublicKey(walletAddress);
     
-    const [tokenAccounts, solBalance] = await Promise.all([
-      connection.getParsedTokenAccountsByOwner(
-        publicKey,
-        { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
-      ),
-      connection.getBalance(publicKey)
-    ]);
+    const [tokenAccounts, solBalance] = await this.rpcWithFallback(async (connection) => {
+      return await Promise.all([
+        connection.getParsedTokenAccountsByOwner(
+          publicKey,
+          { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
+        ),
+        connection.getBalance(publicKey)
+      ]);
+    });
 
     const tokens: TokenBalance[] = [];
 

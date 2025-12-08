@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { TokenBalance, PriceProgress } from '../types/token';
-import { TokenService } from '../lib/api';
-import { ArrowUpDown, Search, Image, ChevronDown, ChevronUp, ChevronRight, RefreshCw, Settings, Eye, EyeOff, GripVertical, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { TokenBalance } from '../types/token';
+import { ArrowUpDown, Search, ChevronDown, ChevronUp, ChevronRight, RefreshCw, Settings, Eye, EyeOff, GripVertical, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { LoadingBar } from './LoadingBar';
 import { PortfolioChart } from './HistoricalChart';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, TouchSensor } from '@dnd-kit/core';
@@ -45,15 +44,6 @@ interface SortIconProps {
   sortDirection: SortDirection;
 }
 
-const SortIcon = ({ field, sortField, sortDirection }: SortIconProps) => {
-  if (sortField !== field) {
-    return <ArrowUpDown className="h-3 w-3 sm:h-4 sm:w-4 text-tertiary" />;
-  }
-  
-  return sortDirection === 'asc' 
-    ? <ChevronUp className="h-3 w-3 sm:h-4 sm:w-4 text-secondary" />
-    : <ChevronDown className="h-3 w-3 sm:h-4 sm:w-4 text-secondary" />;
-};
 
 interface TokenLogoProps {
   token: TokenBalance;
@@ -505,21 +495,10 @@ const {
     setIsMounted(true);
   }, []);
 
-  useEffect(() => {
-    console.log('[TokenTable] tokens prop changed, length:', tokens.length);
-    tokens.forEach(t => {
-      if (t.value > 0) {
-        console.log('[TokenTable]', t.symbol, 'value:', t.value);
-      }
-    });
-  }, [tokens]);
-
   useEffect(() => {}, [loading, processingProgress, totalToProcess, tokens]);
 
   const totalPortfolioValue = useMemo(() => {
-    const total = tokens.reduce((sum, token) => sum + (token.value || 0), 0);
-    console.log('[TokenTable] totalPortfolioValue calculated:', total, 'from', tokens.length, 'tokens');
-    return total;
+    return tokens.reduce((total, token) => total + (token.value || 0), 0);
   }, [tokens]);
 
   const filteredAndSortedTokens = useMemo(() => {

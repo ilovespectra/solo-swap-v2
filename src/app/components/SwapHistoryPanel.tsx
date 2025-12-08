@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   HistorySummaryResponse,
@@ -19,7 +19,6 @@ const HISTORY_ENABLED =
   process.env.NEXT_PUBLIC_ENABLE_HISTORY === 'true' ||
   process.env.ENABLE_HISTORY === 'true';
 
-// Create a global ref to trigger history refreshes from anywhere
 let swapHistoryRefreshCallback: (() => void) | null = null;
 
 export function registerSwapHistoryRefresh(callback: () => void) {

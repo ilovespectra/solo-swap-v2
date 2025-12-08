@@ -69,6 +69,7 @@
 }
 
 /* Split-flap animation - mimics old train terminal displays */
+/* Split-flap animation - mimics old train terminal displays */
 @keyframes split-flap {
   0% {
     transform: perspective(400px) rotateX(0deg);
@@ -91,6 +92,24 @@
     opacity: 1;
   }
 }
+
+.price-updated {
+  animation: split-flap 0.5s ease-in-out;
+  transform-style: preserve-3d;
+  display: inline-block;
+}
+
+/* Random delay classes for staggered animation */
+.price-updated.delay-0 { animation-delay: 0s; }
+.price-updated.delay-1 { animation-delay: 0.05s; }
+.price-updated.delay-2 { animation-delay: 0.1s; }
+.price-updated.delay-3 { animation-delay: 0.15s; }
+.price-updated.delay-4 { animation-delay: 0.2s; }
+.price-updated.delay-5 { animation-delay: 0.25s; }
+.price-updated.delay-6 { animation-delay: 0.3s; }
+.price-updated.delay-7 { animation-delay: 0.35s; }
+.price-updated.delay-8 { animation-delay: 0.4s; }
+.price-updated.delay-9 { animation-delay: 0.45s; }
 
 .price-updated {
   animation: split-flap 0.5s ease-in-out;
@@ -140,42 +159,61 @@ html, body {
   width: 100%;
 }
 
-/* Dark scrollbars for dark mode */
-:root.dark {
+/* Hide scrollbars but keep functionality */
+html {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+html::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+body::-webkit-scrollbar {
+  display: none;
+}
+
+/* Keep thin scrollbars for internal divs in dark mode */
+:root.dark *:not(html):not(body) {
   scrollbar-color: #333333 #0a0a0a;
   scrollbar-width: thin;
 }
 
-:root.dark ::-webkit-scrollbar {
+:root.dark *:not(html):not(body)::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-:root.dark ::-webkit-scrollbar-track {
+:root.dark *:not(html):not(body)::-webkit-scrollbar-track {
   background: #0a0a0a;
 }
 
-:root.dark ::-webkit-scrollbar-thumb {
+:root.dark *:not(html):not(body)::-webkit-scrollbar-thumb {
   background: #333333;
   border: 1px solid #1a1a1a;
 }
 
-:root.dark ::-webkit-scrollbar-thumb:hover {
+:root.dark *:not(html):not(body)::-webkit-scrollbar-thumb:hover {
   background: #444444;
 }
 
-/* Light scrollbars for light mode */
-:root.light {
+/* Keep thin scrollbars for internal divs in light mode */
+:root.light *:not(html):not(body) {
   scrollbar-color: #cccccc #ffffff;
   scrollbar-width: thin;
 }
 
-:root.light ::-webkit-scrollbar {
+:root.light *:not(html):not(body)::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-:root.light ::-webkit-scrollbar-track {
+:root.light *:not(html):not(body)::-webkit-scrollbar-track {
   background: #ffffff;
 }
 

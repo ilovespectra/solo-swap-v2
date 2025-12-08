@@ -1,6 +1,5 @@
 'use client';
 
-import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { 
@@ -8,7 +7,6 @@ import {
   SolflareWalletAdapter,
   LedgerWalletAdapter 
 } from '@solana/wallet-adapter-wallets';
-import { clusterApiUrl } from '@solana/web3.js';
 import { ThemeProvider } from './contexts/themeContext';
 import { ReactNode, useMemo, useEffect } from 'react';
 
@@ -39,7 +37,6 @@ export function Providers({ children }: { children: ReactNode }) {
           if (span) {
             const text = span.textContent || '';
             if (text.match(/[0-9a-zA-Z]{32,44}/) || text.includes('...') || text.length > 20) {
-              // Type cast to HTMLElement to access style property
               (span as HTMLElement).style.textTransform = 'none';
               (button as HTMLElement).style.textTransform = 'none';
             }

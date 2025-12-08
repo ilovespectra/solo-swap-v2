@@ -42,9 +42,10 @@ export default function Home() {
   const [totalToProcess, setTotalToProcess] = useState(0);
   const [currentPortfolioData, setCurrentPortfolioData] = useState<PortfolioHistory[]>([]);
   const [updatedTokens, setUpdatedTokens] = useState<Set<string>>(new Set());
-  const lastHistoryUiUpdate = useRef<number>(0); // throttles UI history updates
-  const lastFirestoreWrite = useRef<number>(0);   // throttles Firestore writes
-  const isInitialLoad = useRef(true); // Track if we're in initial load
+  const lastHistoryUiUpdate = useRef<number>(0);
+  const lastFirestoreWrite = useRef<number>(0);
+  const isInitialLoad = useRef(true);
+  const subscriptionsSetup = useRef(false);
 
   const {
     columns,
@@ -105,7 +106,6 @@ const loadPortfolioHistory = useCallback(async () => {
         };
         
         if (!data.encryptedData) {
-          console.warn('no encrypted data found for record:', doc.id);
           return null;
         }
 
@@ -115,7 +115,6 @@ const loadPortfolioHistory = useCallback(async () => {
           const decryptedTokenCount = encryptionService.decryptData<number>(data.encryptedData.tokenCount, publicKey.toString());
 
           if (decryptedTotalValue === null || decryptedWalletCount === null || decryptedTokenCount === null) {
-            console.warn('failed to decrypt data for record:', doc.id);
             return null;
           }
 
@@ -215,10 +214,8 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
   
   try {
     const tokenBalances = await tokenService.getTokenBalances(publicKey.toString());
-    console.log('[Page] Token balances fetched:', tokenBalances.length, 'tokens');
 
     const tokensWithBalance = tokenBalances.filter(token => token.uiAmount > 0);
-    console.log('[Page] Tokens with balance:', tokensWithBalance.length);
     setTotalToProcess(tokensWithBalance.length);
     
     const tokensWithPrices = await tokenService.getTokenPrices(
@@ -229,16 +226,10 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       }
     );
 
-    console.log('[Page] Tokens with prices:', tokensWithPrices.length);
-    console.log('[Page] Token prices sample:', tokensWithPrices.slice(0, 3).map(t => ({ mint: t.mint, price: t.price, value: t.value })));
-
     setTokens(tokensWithPrices);
     isInitialLoad.current = false;
     
     const totalValue = tokensWithPrices.reduce((sum, token) => sum + (token.value || 0), 0);
-    console.log('[Page] Total portfolio value:', totalValue);
-    
-    // Save history if we have a total value (don't require all prices)
     if (totalValue > 0) {
       await savePortfolioHistory(totalValue, 1, tokensWithPrices.length);
     }
@@ -270,13 +261,11 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       }
     );
     
-    // Create new tokens array
     const newTokens = tokens.map(token => {
       const refreshedToken = refreshedTokens.find(t => t.mint === token.mint);
       return refreshedToken || token;
     });
     
-    // Track which tokens were updated for animation
     const mints = new Set<string>();
     refreshedTokens.forEach(token => {
       const oldToken = tokens.find(t => t.mint === token.mint);
@@ -288,7 +277,6 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
     setTokens(newTokens);
     setUpdatedTokens(mints);
     
-    // Clear animation after it plays
     setTimeout(() => {
       setUpdatedTokens(new Set());
     }, 800);
@@ -318,6 +306,78 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
     }
   }, [connected, fetchTokenBalances]);
 
+  const tokenMints = useMemo(() => {
+    return tokens
+      .filter(token => token.uiAmount > 0)
+      .map(token => token.mint)
+      .sort();
+  }, [tokens]);
+
+  const tokenMintsKey = tokenMints.join(',');
+
+  useEffect(() => {
+    if (!publicKey || tokenMints.length === 0 || subscriptionsSetup.current) {
+      return;
+    }
+
+    subscriptionsSetup.current = true;
+
+    const unsubscribeCallbacks: (() => void)[] = [];
+
+    tokenMints.forEach(mint => {
+      const unsubscribe = tokenService.subscribeToPriceUpdates(mint, (priceUpdate) => {
+        setTokens(prev => {
+          return prev.map(token =>
+            token.mint === priceUpdate.mint
+              ? {
+                  ...token,
+                  price: priceUpdate.price || 0,
+                  value: (priceUpdate.price || 0) * token.uiAmount,
+                  changePercent24h: priceUpdate.changePercent24h,
+                  lastUpdated: priceUpdate.lastUpdated
+                }
+              : token
+          );
+        });
+
+        setUpdatedTokens(prev => {
+          const newSet = new Set(prev);
+          newSet.add(priceUpdate.mint);
+          return newSet;
+        });
+
+        setTimeout(() => {
+          setUpdatedTokens(prev => {
+            const next = new Set(prev);
+            next.delete(priceUpdate.mint);
+            return next;
+          });
+        }, 800);
+
+        const now = Date.now();
+        if (now - lastFirestoreWrite.current > 30000) {
+          lastFirestoreWrite.current = now;
+          setTokens(currentTokens => {
+            const totalValue = currentTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+            if (totalValue > 0) {
+              savePortfolioHistory(totalValue, 1, currentTokens.length).catch(err =>
+                console.error('Failed to save portfolio history:', err)
+              );
+            }
+            return currentTokens;
+          });
+        }
+      });
+
+      unsubscribeCallbacks.push(unsubscribe);
+    });
+
+    return () => {
+      unsubscribeCallbacks.forEach(unsub => unsub());
+      subscriptionsSetup.current = false;
+    };
+  }, [publicKey, tokenMintsKey, tokenMints.length, tokenService, savePortfolioHistory]);
+
   const handleTokenSelect = (mint: string, selected: boolean) => {
     setTokens(prev => prev.map(token => 
       token.mint === mint ? { ...token, selected } : token
@@ -332,8 +392,27 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
   const totalSelectedValue = selectedTokens.reduce((sum, token) => sum + (token.value || 0), 0);
   const [selectedOutputToken, setSelectedOutputToken] = useState<string>('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 
-  const handleSwapComplete = () => {
-    fetchTokenBalances(); 
+  const handleSwapComplete = async () => {
+    if (!publicKey) return;
+    
+    try {
+      const tokenBalances = await tokenService.getTokenBalances(publicKey.toString());
+      const tokensWithBalance = tokenBalances.filter(token => token.uiAmount > 0);
+      
+      const tokensWithPrices = await tokenService.getTokenPrices(
+        tokensWithBalance,
+        () => {}
+      );
+
+      setTokens(tokensWithPrices);
+      
+      const totalValue = tokensWithPrices.reduce((sum, token) => sum + (token.value || 0), 0);
+      if (totalValue > 0) {
+        await savePortfolioHistory(totalValue, 1, tokensWithPrices.length);
+      }
+    } catch (err) {
+      console.error('silent token refresh failed:', err);
+    }
   };
 
   const handleOutputTokenChange = (mint: string) => {
@@ -419,15 +498,13 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       </div>
 
       <div className="lg:col-span-1 order-1 lg:order-2 mb-0 sm:mb-0">
-        <div className="sticky top-4">
-          <SwapInterface
-            selectedTokens={selectedTokens}
-            totalSelectedValue={totalSelectedValue}
-            allTokens={tokens}
-            onSwapComplete={handleSwapComplete}
-            onOutputTokenChange={handleOutputTokenChange}
-          />
-        </div>
+        <SwapInterface
+          selectedTokens={selectedTokens}
+          totalSelectedValue={totalSelectedValue}
+          allTokens={tokens}
+          onSwapComplete={handleSwapComplete}
+          onOutputTokenChange={handleOutputTokenChange}
+        />
       </div>
     </div>
   );
@@ -536,7 +613,7 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
           {currentView === 'main' && (
             <div className="mt-0 sm:mt-8 space-y-0 sm:space-y-6">
               <SwapHistoryPanel />
-              <HistoricalPortfolio />
+              {/* <HistoricalPortfolio /> */}
             </div>
           )}
         </main>

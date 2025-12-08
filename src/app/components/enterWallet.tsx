@@ -1156,7 +1156,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
   tokenMints.forEach(mint => {
     const unsubscribe = tokenService.subscribeToPriceUpdates(mint, (priceUpdate) => {
-      // Update results with new price
       setResults(prev => {
         const updated = prev.map(result => ({
           ...result,
@@ -1181,7 +1180,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
         const newTotalPortfolioValue = updated.reduce((sum, result) => sum + result.totalValue, 0);
         
-        // Save history every 30 seconds
         const now = Date.now();
         if (now - lastFirestoreWrite.current > 30000 && newTotalPortfolioValue > 0) {
           lastFirestoreWrite.current = now;
@@ -1193,14 +1191,12 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
         return updated;
       });
 
-      // Trigger token animation
       setUpdatedTokens(prev => {
         const newSet = new Set(prev);
         newSet.add(priceUpdate.mint);
         return newSet;
       });
 
-      // Trigger wallet card animation for affected wallets
       setResults(prevResults => {
         setUpdatedWallets(prevWallets => {
           const newSet = new Set(prevWallets);
@@ -1270,7 +1266,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
     
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    // Step 1: Fetch balances for ALL wallets first
     const walletBalances: Array<{ wallet: SavedWallet; tokens: TokenBalance[] }> = [];
     
     for (let i = 0; i < savedWallets.length; i++) {
@@ -1295,7 +1290,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       }
     }
 
-    // Step 2: Collect ALL unique token mints across ALL wallets
     const allMints = new Set<string>();
     const tokensByMint = new Map<string, TokenBalance>();
     
@@ -1308,7 +1302,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       });
     });
 
-    // Step 3: Fetch prices for ALL unique tokens in ONE call
     const uniqueTokens = Array.from(tokensByMint.values());
     let tokensWithPrices: TokenBalance[] = [];
     
@@ -1324,7 +1317,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       }
     }
 
-    // Create a price map
     const priceMap = new Map<string, { price: number; value?: number; changePercent24h?: number | null }>();
     tokensWithPrices.forEach(token => {
       priceMap.set(token.mint, { 
@@ -1333,7 +1325,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       });
     });
 
-    // Step 4: Build results for each wallet using the shared price data
     const newResults: AnalysisResult[] = [];
     
     for (const { wallet, tokens } of walletBalances) {
@@ -1771,7 +1762,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
           const walletDoc = await getDoc(walletDocRef);
           
           if (walletDoc.exists()) {
-            console.warn(`skipping duplicate address at row ${index + 1}: ${address} (already exists in your wallets)`);
             duplicateAddresses.add(address);
             failedImports++;
             errors.push(`row ${index + 1}: address already exists in your wallets ${wallet.address}`);

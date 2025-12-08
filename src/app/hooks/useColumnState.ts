@@ -12,15 +12,13 @@ const defaultColumns: ColumnConfig[] = [
 ];
 
 export const useColumnState = () => {
-  const { user } = useAuth(); // Get current user from your auth context
+  const { user } = useAuth();
   const [columns, setColumns] = useState<ColumnConfig[]>(defaultColumns);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load columns from Firestore on mount
   useEffect(() => {
     const loadColumns = async () => {
       if (!user?.uid) {
-        // Fallback to localStorage if no user
         const saved = localStorage.getItem('token-table-columns');
         if (saved) {
           setColumns(JSON.parse(saved));
@@ -34,18 +32,15 @@ export const useColumnState = () => {
         if (savedColumns) {
           setColumns(savedColumns);
         } else {
-          // Fallback to localStorage for first-time users
           const localSaved = localStorage.getItem('token-table-columns');
           if (localSaved) {
             const parsedColumns = JSON.parse(localSaved);
             setColumns(parsedColumns);
-            // Save to Firestore for future use
             await saveColumnSettings(user.uid, parsedColumns);
           }
         }
       } catch (error) {
         console.error('Failed to load column settings:', error);
-        // Fallback to localStorage
         const saved = localStorage.getItem('token-table-columns');
         if (saved) {
           setColumns(JSON.parse(saved));
@@ -58,18 +53,14 @@ export const useColumnState = () => {
     loadColumns();
   }, [user?.uid]);
 
-  // Save to both Firestore and localStorage whenever columns change
   const saveColumns = useCallback(async (newColumns: ColumnConfig[]) => {
-    // Save to localStorage immediately
     localStorage.setItem('token-table-columns', JSON.stringify(newColumns));
     
-    // Save to Firestore if user is authenticated
     if (user?.uid) {
       try {
         await saveColumnSettings(user.uid, newColumns);
       } catch (error) {
         console.error('Failed to save to Firestore:', error);
-        // Continue anyway - localStorage is the fallback
       }
     }
   }, [user?.uid]);

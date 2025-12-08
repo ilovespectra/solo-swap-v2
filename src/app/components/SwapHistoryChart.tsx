@@ -12,7 +12,7 @@ import {
   ChartOptions,
 } from 'chart.js';
 import { HistorySummaryPoint } from '../types/history';
-import { Flame, DollarSign, Calendar, ArrowRightLeft, TrendingDown, Package, ChevronDown, Activity, Coins, RefreshCw } from 'lucide-react';
+import { Flame, Calendar, ArrowRightLeft, ChevronDown, Activity, Coins, RefreshCw } from 'lucide-react';
 
 ChartJS.register(
   CategoryScale,

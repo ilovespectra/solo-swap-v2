@@ -73,7 +73,6 @@ export function HistoricalPortfolio({
         const data = doc.data();
         
         if (!data.encryptedData) {
-          console.warn('No encrypted data found for record:', doc.id);
           continue;
         }
 
@@ -100,7 +99,6 @@ export function HistoricalPortfolio({
             );
 
             if (decryptedTotalValue === null || decryptedWalletCount === null || decryptedTokenCount === null) {
-              console.warn('failed to decrypt data for record:', doc.id);
               continue;
             }
 
@@ -122,7 +120,6 @@ export function HistoricalPortfolio({
             });
             successfulDecryptions++;
           } else {
-            console.warn('failed to decrypt data for record:', doc.id);
             decryptionErrors++;
           }
         } catch (decryptError) {

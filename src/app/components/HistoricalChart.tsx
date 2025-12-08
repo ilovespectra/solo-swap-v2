@@ -63,27 +63,19 @@ export function PortfolioChart({
   const [valueUpdated, setValueUpdated] = useState(false);
   const prevLiveValue = useRef<number | undefined>(undefined);
 
-  console.log('[HistoricalChart] Rendered with livePortfolioValue:', livePortfolioValue);
-
   useEffect(() => {
     if (livePortfolioValue !== undefined) {
-      // First render - just store the initial value
       if (prevLiveValue.current === undefined) {
-        console.log('[HistoricalChart] Initial value set:', livePortfolioValue);
         prevLiveValue.current = livePortfolioValue;
         return;
       }
       
-      // Value changed - trigger animation
       if (prevLiveValue.current !== livePortfolioValue) {
-        console.log('[HistoricalChart] Value updated:', prevLiveValue.current, '->', livePortfolioValue);
-        // Use setTimeout to avoid cascading render warning
         const animationTimer = setTimeout(() => {
           setValueUpdated(true);
         }, 0);
         const resetTimer = setTimeout(() => setValueUpdated(false), 800);
         
-        // Update the ref for next comparison
         prevLiveValue.current = livePortfolioValue;
         
         return () => {
@@ -178,13 +170,13 @@ export function PortfolioChart({
 
     if (performanceStats.isPositive) {
       return {
-        borderColor: 'rgb(0, 255, 136)', // --green-primary
+        borderColor: 'rgb(0, 255, 136)',
         backgroundColor: 'rgba(0, 255, 136, 0.1)',
         tooltipBorderColor: 'rgba(0, 255, 136, 0.5)'
       };
     } else {
       return {
-        borderColor: 'rgb(217, 79, 31)', // --orange-dark
+        borderColor: 'rgb(217, 79, 31)',
         backgroundColor: 'rgba(217, 79, 31, 0.1)',
         tooltipBorderColor: 'rgba(217, 79, 31, 0.5)'
       };
@@ -427,14 +419,10 @@ export function PortfolioChart({
           <div className={`text-lg md:text-2xl font-bold text-green-primary transition-all ${
             valueUpdated ? 'price-updated' : ''
           }`}>
-            ${(() => {
-              const displayValue = livePortfolioValue !== undefined ? livePortfolioValue : portfolioHistory[portfolioHistory.length - 1]?.totalValue || 0;
-              console.log('[HistoricalChart] Displaying value:', displayValue, 'from', livePortfolioValue !== undefined ? 'livePortfolioValue' : 'portfolioHistory');
-              return displayValue.toLocaleString(undefined, { 
-                minimumFractionDigits: 2, 
-                maximumFractionDigits: 2 
-              });
-            })()}
+            ${(livePortfolioValue !== undefined ? livePortfolioValue : portfolioHistory[portfolioHistory.length - 1]?.totalValue || 0).toLocaleString(undefined, { 
+              minimumFractionDigits: 2, 
+              maximumFractionDigits: 2 
+            })}
           </div>
           <div className="text-xs md:text-sm text-secondary">current value</div>
         </div>

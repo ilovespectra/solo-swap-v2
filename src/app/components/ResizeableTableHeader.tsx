@@ -1,4 +1,3 @@
-// components/ResizableTableHeader.tsx
 import { useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -8,8 +7,8 @@ import { ColumnConfig } from '../types/table';
 interface ResizableTableHeaderProps {
   column: ColumnConfig;
   onResize: (columnId: string, newWidth: number) => void;
-  onSort: (field: string) => void; // Keep as string for flexibility
-  sortField: string; // Keep as string for flexibility
+  onSort: (field: string) => void;
+  sortField: string;
   sortDirection: 'asc' | 'desc';
 }
 

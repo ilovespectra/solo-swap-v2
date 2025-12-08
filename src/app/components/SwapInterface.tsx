@@ -2,13 +2,14 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { VersionedTransaction } from '@solana/web3.js';
+import { VersionedTransaction, SystemProgram, TransactionMessage, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TokenBalance } from '../types/token';
 import { TokenService } from '../lib/api';
 import { SwapBatchRecord, SwapTokenInput } from '../types/history';
 import { encryptionService } from '../lib/encryption';
 import { triggerSwapHistoryRefresh } from './SwapHistoryPanel';
-import { ArrowUpDown, Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield, ChevronDown, Search, X, ExternalLinkIcon, Copy } from 'lucide-react';
+import bs58 from 'bs58';
+import { Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield, ChevronDown, Search, X, Copy, Info } from 'lucide-react';
 
 interface SwapInterfaceProps {
   selectedTokens: TokenBalance[];
@@ -21,6 +22,17 @@ interface SwapInterfaceProps {
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const HISTORY_ENABLED = process.env.NEXT_PUBLIC_ENABLE_HISTORY === 'true';
+
+const JITO_TIP_ACCOUNTS = [
+  '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
+  'HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe',
+  'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY',
+  'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49',
+  'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh',
+  'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt',
+  'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL',
+  '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT'
+];
 
 interface SwapResult {
   symbol: string;
@@ -194,8 +206,10 @@ export function SwapInterface({
   const [currentStep, setCurrentStep] = useState<string>('');
   const [swapResults, setSwapResults] = useState<SwapResult[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [useJitoBundling, setUseJitoBundling] = useState(true); // Default to Jito bundling
+  const [useJitoBundling, setUseJitoBundling] = useState(true);
+  const [jitoTipLamports, setJitoTipLamports] = useState<number>(100000);
   const [valueUpdated, setValueUpdated] = useState(false);
+  const [failedTokens, setFailedTokens] = useState<ProRataToken[]>([]);
   const prevTotalSelectedValue = useRef(totalSelectedValue);
 
   const isLedgerConnected = useMemo(() => {
@@ -609,14 +623,11 @@ export function SwapInterface({
     try {
       setCurrentStep('preparing bundle for jito...');
       
-      const bundleSize = Math.min(tokens.length, 5);
-      const tokensToBundle = tokens.slice(0, bundleSize);
-      
       const { blockhash } = await getFreshBlockhash();
       
-      setCurrentStep(`building ${bundleSize} swap transactions...`);
+      setCurrentStep(`building ${tokens.length} swap transaction${tokens.length > 1 ? 's' : ''}...`);
       
-      for (const token of tokensToBundle) {
+      for (const token of tokens) {
         try {
           const quoteSelection = await getBestSwapQuote(token);
           const quoteData = quoteSelection.quote;
@@ -685,19 +696,12 @@ export function SwapInterface({
       const adapter = wallet.adapter as unknown as { signAllTransactions?: (txs: VersionedTransaction[]) => Promise<VersionedTransaction[]> };
       const supportsSignAll = typeof adapter.signAllTransactions === 'function';
       
-      console.log('Wallet adapter:', wallet.adapter.name);
-      console.log('Supports signAllTransactions:', supportsSignAll);
-      console.log('Number of transactions to sign:', swapTransactions.length);
-      
       if (supportsSignAll && swapTransactions.length > 1 && adapter.signAllTransactions) {
-        console.log('Using signAllTransactions for batch signing');
         try {
           signedTransactions = await adapter.signAllTransactions(
             swapTransactions.map(st => st.transaction)
           );
-          console.log('Successfully signed all transactions in batch');
-        } catch (err) {
-          console.error('Batch signing failed, falling back to individual:', err);
+        } catch {
           signedTransactions = [];
           for (const st of swapTransactions) {
             const signed = await signTransactionUniversal(st.transaction, st.token.symbol);
@@ -705,7 +709,6 @@ export function SwapInterface({
           }
         }
       } else {
-        console.log('Using individual transaction signing');
         signedTransactions = [];
         for (const st of swapTransactions) {
           const signed = await signTransactionUniversal(st.transaction, st.token.symbol);
@@ -713,56 +716,122 @@ export function SwapInterface({
         }
       }
       
+      setCurrentStep('adding jito tip to bundle...');
+      const { blockhash: tipBlockhash } = await getFreshBlockhash();
+      const tipAccount = new PublicKey(
+        JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]
+      );
+      
+      const tipInstruction = SystemProgram.transfer({
+        fromPubkey: publicKey!,
+        toPubkey: tipAccount,
+        lamports: jitoTipLamports,
+      });
+      
+      const tipMessage = new TransactionMessage({
+        payerKey: publicKey!,
+        recentBlockhash: tipBlockhash,
+        instructions: [tipInstruction],
+      }).compileToV0Message();
+      
+      const tipTransaction = new VersionedTransaction(tipMessage);
+      const signedTipTransaction = await signTransactionUniversal(
+        tipTransaction, 
+        `tip (${(jitoTipLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL)`
+      );
+      
+      signedTransactions.push(signedTipTransaction);
+      
       setCurrentStep('submitting bundle to jito...');
       
       const serializedTransactions = signedTransactions.map(tx => 
         Buffer.from(tx.serialize()).toString('base64')
       );
       
-      const jitoResponse = await fetch('https://mainnet.block-engine.jito.wtf/api/v1/bundles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'sendBundle',
-          params: [serializedTransactions]
-        })
-      });
+      let jitoResult: { result?: string; error?: { message: string } } | null = null;
+      let submitAttempts = 0;
+      const maxSubmitAttempts = 5;
       
-      if (!jitoResponse.ok) {
-        throw new Error('jito bundle submission failed');
+      const jitoEndpoints = [
+        'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles'
+      ];
+      
+      while (submitAttempts < maxSubmitAttempts) {
+        const endpoint = jitoEndpoints[submitAttempts % jitoEndpoints.length];
+        submitAttempts++;
+        
+        try {
+          const jitoResponse = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'sendBundle',
+              params: [serializedTransactions]
+            })
+          });
+          
+          if (!jitoResponse.ok) {
+            if (jitoResponse.status === 429 && submitAttempts < maxSubmitAttempts) {
+              setCurrentStep(`endpoint busy, trying next (${submitAttempts}/${maxSubmitAttempts})...`);
+              await new Promise(resolve => setTimeout(resolve, 500));
+              continue;
+            }
+            
+            throw new Error(`jito error (${jitoResponse.status})`);
+          }
+          
+          jitoResult = await jitoResponse.json();
+          
+          if (jitoResult && jitoResult.error) {
+            throw new Error(`jito: ${jitoResult.error.message}`);
+          }
+          
+          if (!jitoResult || !jitoResult.result) {
+            throw new Error('no bundle id returned');
+          }
+          
+          break;
+          
+        } catch (err) {
+          if (submitAttempts >= maxSubmitAttempts) {
+            throw err;
+          }
+          setCurrentStep(`retry ${submitAttempts}/${maxSubmitAttempts}...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
       }
       
-      const jitoResult = await jitoResponse.json();
-      
-      if (jitoResult.error) {
-        throw new Error(`jito error: ${jitoResult.error.message}`);
+      if (!jitoResult || jitoResult.error) {
+        throw new Error(jitoResult?.error?.message || 'bundle submission failed after retries');
       }
-      
-      const bundleId = jitoResult.result;
-      console.log('jito bundle submitted:', bundleId);
       
       setCurrentStep('waiting for bundle confirmation...');
-      
+
       let confirmed = false;
       let attempts = 0;
       const maxAttempts = 60;
+      
+      const connection = tokenService.getConnection();
       
       while (!confirmed && attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
         
         try {
-          const signature = await connection.getSignatureStatuses(
-            signedTransactions.map(tx => Buffer.from(tx.signatures[0]).toString('base64'))
-          );
+          const firstSig = bs58.encode(signedTransactions[0].signatures[0]);
+          const status = await connection.getSignatureStatus(firstSig);
           
-          if (signature.value.some(s => s && s.confirmationStatus === 'confirmed')) {
+          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
             confirmed = true;
           }
         } catch {
-          console.log('polling bundle status...', attempts);
         }
       }
       
@@ -773,7 +842,7 @@ export function SwapInterface({
       for (let i = 0; i < swapTransactions.length; i++) {
         const { token, quote } = swapTransactions[i];
         const signedTx = signedTransactions[i];
-        const signature = Buffer.from(signedTx.signatures[0]).toString('base64');
+        const signature = bs58.encode(signedTx.signatures[0]);
         
         const outputDecimals = outputTokenInfo?.decimals || (outputToken === SOL_MINT ? 9 : 6);
         const outputAmount = parseInt(quote.outAmount) / Math.pow(10, outputDecimals);
@@ -795,48 +864,11 @@ export function SwapInterface({
       
       setCurrentStep(`bundle confirmed! ${results.length} swaps executed`);
       
-      if (tokens.length > bundleSize) {
-        setCurrentStep('processing remaining tokens...');
-        const remainingTokens = tokens.slice(bundleSize);
-        const remainingResults = await executeSequentialSwaps(remainingTokens);
-        results.push(...remainingResults);
-      }
-      
     } catch (err) {
       console.error('jito bundle execution failed:', err);
       setError(err instanceof Error ? err.message.toLowerCase() : 'bundle execution failed');
       
-      const tokensAlreadyProcessed = swapTransactions.map(st => st.token.mint);
-      const tokensStillToDo = tokens.filter(t => !tokensAlreadyProcessed.includes(t.mint));
-      
-      if (tokensStillToDo.length > 0) {
-        setCurrentStep('falling back to sequential swaps for remaining tokens...');
-        const fallbackResults = await executeSequentialSwaps(tokensStillToDo);
-        results.push(...fallbackResults);
-      } else {
-        for (let i = 0; i < swapTransactions.length; i++) {
-          const { token, quote } = swapTransactions[i];
-          const signedTx = signedTransactions[i];
-          const signature = Buffer.from(signedTx.signatures[0]).toString('base64');
-          
-          const outputDecimals = outputTokenInfo?.decimals || (outputToken === SOL_MINT ? 9 : 6);
-          const outputAmount = parseInt(quote.outAmount) / Math.pow(10, outputDecimals);
-          const outputUsd = outputAmount * (outputTokenInfo?.price || (outputToken === USDC_MINT ? 1 : token.price || 0));
-          
-          results.push({
-            symbol: token.symbol,
-            mint: token.mint,
-            decimals: token.decimals,
-            signature,
-            amount: token.liquidationAmount,
-            inputAmount: token.swapAmount,
-            outputAmount,
-            outputUsd,
-            priceUsd: token.price,
-            retryCount: 0
-          });
-        }
-      }
+      setFailedTokens(tokens);
     }
     
     return results;
@@ -1014,15 +1046,31 @@ export function SwapInterface({
         throw new Error('no valid tokens with sufficient balance to liquidate');
       }
 
-      const shouldUseJito = useJitoBundling && validTokens.length <= 5;
+      let results: SwapResult[] = [];
       
-      if (shouldUseJito) {
-        setCurrentStep('using jito bundle (single signature)...');
+      if (useJitoBundling) {
+        const batchSize = 5;
+        const numBatches = Math.ceil(validTokens.length / batchSize);
+        
+        setCurrentStep(`processing ${numBatches} jito bundle${numBatches > 1 ? 's' : ''}...`);
+        
+        for (let i = 0; i < numBatches; i++) {
+          const start = i * batchSize;
+          const end = Math.min(start + batchSize, validTokens.length);
+          const batchTokens = validTokens.slice(start, end);
+          
+          setCurrentStep(`bundle ${i + 1}/${numBatches}: ${batchTokens.length} swaps...`);
+          
+          const batchResults = await executeJitoBundledSwaps(batchTokens);
+          results.push(...batchResults);
+          
+          if (i < numBatches - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      } else {
+        results = await executeSequentialSwaps(validTokens);
       }
-      
-      const results = shouldUseJito
-        ? await executeJitoBundledSwaps(validTokens)
-        : await executeSequentialSwaps(validTokens);
 
       const successfulSwaps = results.filter(result => !result.error);
       const failedSwaps = results.filter(result => result.error);
@@ -1041,13 +1089,16 @@ export function SwapInterface({
         setCurrentStep(`successfully liquidated ${successfulSwaps.length} tokens (${totalSwappedPercentage}% of selection)`);
         
         triggerSwapHistoryRefresh();
-        
-        setTimeout(() => setCurrentStep(''), 5000);
-        onSwapComplete();
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
       }
       
       if (failedSwaps.length > 0) {
-        const errorMsg = `${failedSwaps.length} liquidations failed. ${successfulSwaps.length > 0 ? 'partial success.' : ''}`;
+        const errorMsg = `${failedSwaps.length} liquidations failed. ${successfulSwaps.length > 0 ? 'partial success. view results above.' : 'view errors above.'}`;
         console.error('failed liquidations:', failedSwaps);
         setError(errorMsg);
       }
@@ -1056,6 +1107,87 @@ export function SwapInterface({
       const errorMsg = (err instanceof Error ? err.message : 'liquidation failed').toLowerCase();
       setError(errorMsg);
       console.error('liquidation execution error:', err);
+    } finally {
+      setSwapping(false);
+    }
+  };
+
+  const retryBundled = async () => {
+    if (failedTokens.length === 0) return;
+    
+    setError('');
+    setSwapResults([]);
+    setSwapping(true);
+    
+    try {
+      const results = await executeJitoBundledSwaps(failedTokens);
+      setSwapResults(results);
+      
+      const successfulSwaps = results.filter(r => !r.error && r.signature);
+      const failedSwaps = results.filter(r => r.error);
+      
+      if (successfulSwaps.length > 0) {
+        if (failedSwaps.length === 0) {
+          setFailedTokens([]);
+        }
+        setCurrentStep(`bundle successful! ${successfulSwaps.length} swaps completed`);
+        triggerSwapHistoryRefresh();
+        
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
+      }
+      
+      if (failedSwaps.length > 0) {
+        setError(`${failedSwaps.length} swaps still failed. view results above.`);
+      }
+    } catch (err) {
+      const errorMsg = (err instanceof Error ? err.message : 'retry failed').toLowerCase();
+      setError(errorMsg);
+    } finally {
+      setSwapping(false);
+    }
+  };
+
+  const retryIndividually = async () => {
+    if (failedTokens.length === 0) return;
+    
+    setError('');
+    setSwapResults([]);
+    setSwapping(true);
+    
+    try {
+      const results = await executeSequentialSwaps(failedTokens);
+      setSwapResults(results);
+      
+      const successfulSwaps = results.filter(r => !r.error && r.signature);
+      const failedSwaps = results.filter(r => r.error);
+      
+      if (successfulSwaps.length > 0) {
+        if (failedSwaps.length === 0) {
+          setFailedTokens([]);
+        }
+        setCurrentStep(`${successfulSwaps.length} swaps completed individually`);
+        triggerSwapHistoryRefresh();
+        
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
+      }
+      
+      if (failedSwaps.length > 0) {
+        setError(`${failedSwaps.length} swaps still failed. view results above.`);
+        setFailedTokens(failedTokens.filter(t => results.find(r => r.mint === t.mint && r.error)));
+      }
+    } catch (err) {
+      const errorMsg = (err instanceof Error ? err.message : 'retry failed').toLowerCase();
+      setError(errorMsg);
     } finally {
       setSwapping(false);
     }
@@ -1162,7 +1294,7 @@ export function SwapInterface({
       <span>cart</span>
     </h2>
 
-    <div className="max-h-[calc(100vh-200px)] overflow-y-auto overflow-x-hidden mobile-scroll pr-2 -mr-2">
+    <div className="max-h-[calc(100vh-200px)] lg:max-h-none overflow-y-auto lg:overflow-y-visible overflow-x-hidden mobile-scroll lg:pr-0 pr-2 -mr-2 lg:mr-0">
       {selectedTokens.length === 0 ? (
       <div className="text-center py-6 sm:py-8 text-tertiary justify-items-center">
         <Calculator className="h-8 w-8 sm:h-12 sm:w-12 mx-auto mb-3 sm:mb-4 opacity-50" />
@@ -1258,7 +1390,11 @@ export function SwapInterface({
             {showAdvanced && (
               <div className="space-y-3 sm:space-y-4 animate-slideDown ml-3 mr-3">
                 {/* Jito Bundling Toggle */}
-                <div className="bg-tertiary border border-primary  p-3 sm:p-4">
+                <div className={`border p-3 sm:p-4 transition-all duration-300 ${
+                  useJitoBundling 
+                    ? 'bg-green-primary/5 border-green-primary shadow-lg shadow-green-primary/20' 
+                    : 'bg-tertiary border-primary'
+                }`}>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <label className="flex items-center space-x-2 cursor-pointer mobile-optimized">
@@ -1268,21 +1404,70 @@ export function SwapInterface({
                           onChange={(e) => setUseJitoBundling(e.target.checked)}
                           className="border-primary text-orange-primary focus:ring-2 focus:ring-orange-primary w-4 h-4"
                         />
-                        <div className="flex-1">
+                        <div className="flex-1 flex items-center space-x-2">
                           <div className="text-xs sm:text-sm font-medium text-primary">
-                            jito bundle (single signature)
+                            jito bundle
                           </div>
-                          <div className="text-xs text-secondary mt-0.5">
-                            bundle up to 5 swaps into one transaction requiring only 1 signature. faster and more efficient.
+                          <div className="group/tooltip relative inline-block">
+                            <Info className="h-3 w-3 text-secondary hover:text-green-primary cursor-help transition-colors" />
+                            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 hidden group-hover/tooltip:block w-64 p-3 bg-secondary border border-green-primary text-xs text-primary z-50 shadow-xl shadow-green-primary/30 pointer-events-none">
+                              bundle up to 5 swaps into one transaction requiring only 1 signature. faster and more efficient.
+                            </div>
                           </div>
                         </div>
                       </label>
                     </div>
-                    <Shield className={`h-5 w-5 ml-2 flex-shrink-0 ${useJitoBundling ? 'text-green-primary' : 'text-secondary'}`} />
+                    <Shield className={`h-5 w-5 ml-2 flex-shrink-0 transition-all duration-300 ${
+                      useJitoBundling ? 'text-green-primary drop-shadow-[0_0_8px_rgba(0,255,136,0.5)]' : 'text-secondary'
+                    }`} />
                   </div>
                   {useJitoBundling && selectedTokens.length > 5 && (
-                    <div className="mt-2 text-xs text-orange-dark bg-orange-primary/10 p-2  border border-orange-dark/30">
-                      ⚠️ you have {selectedTokens.length} tokens selected. first 5 will be bundled, remaining will execute sequentially.
+                    <div className="mt-2 text-xs text-green-primary bg-green-primary/10 p-2 border border-green-primary/30">
+                      ✓ {selectedTokens.length} tokens will be batched into {Math.ceil(selectedTokens.length / 5)} bundles of up to 5 swaps each
+                    </div>
+                  )}
+                  
+                  {/* Jito Tip Amount */}
+                  {useJitoBundling && (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-xs font-medium text-secondary">
+                        jito tip (optional, recommended)
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="number"
+                          value={(jitoTipLamports / LAMPORTS_PER_SOL).toFixed(4)}
+                          onChange={(e) => {
+                            const sol = parseFloat(e.target.value);
+                            if (!isNaN(sol) && sol >= 0) {
+                              setJitoTipLamports(Math.floor(sol * LAMPORTS_PER_SOL));
+                            }
+                          }}
+                          step="0.0001"
+                          min="0"
+                          className="flex-1 bg-secondary border border-primary px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-primary"
+                        />
+                        <span className="text-xs text-secondary whitespace-nowrap">SOL</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {[0.0001, 0.0005, 0.001, 0.005].map(amount => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => setJitoTipLamports(Math.floor(amount * LAMPORTS_PER_SOL))}
+                            className={`text-xs px-2 py-1 border transition-colors ${
+                              jitoTipLamports === Math.floor(amount * LAMPORTS_PER_SOL)
+                                ? 'bg-orange-primary border-orange-primary text-primary'
+                                : 'bg-tertiary border-primary text-secondary hover:border-orange-primary'
+                            }`}
+                          >
+                            {amount} SOL
+                          </button>
+                        ))}
+                      </div>
+                      <div className="text-xs text-tertiary">
+                        recommended: 0.0001-0.001 SOL. higher tips may improve bundle landing success rate.
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1566,7 +1751,46 @@ export function SwapInterface({
               <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4" />
               <span className="text-xs sm:text-m font-medium">{getProcessName} error</span>
             </div>
-            <span className="text-xs sm:text-m">{error}</span>
+            <span className="text-xs sm:text-m block mb-3">{error}</span>
+            
+            {/* Retry buttons when bundle fails */}
+            {failedTokens.length > 0 && !swapping && (
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={retryBundled}
+                  className="flex-1 py-2 px-3 rounded text-xs sm:text-sm font-medium transition-all flex items-center justify-center space-x-1 mobile-optimized"
+                  style={{
+                    background: 'var(--orange-primary)',
+                    color: 'white',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--orange-dark)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'var(--orange-primary)'}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>retry bundled</span>
+                </button>
+                <button
+                  onClick={retryIndividually}
+                  className="flex-1 py-2 px-3 rounded text-xs sm:text-sm font-medium transition-all flex items-center justify-center space-x-1 mobile-optimized"
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-primary)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-secondary)';
+                    e.currentTarget.style.borderColor = 'var(--orange-primary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-tertiary)';
+                    e.currentTarget.style.borderColor = 'var(--border-primary)';
+                  }}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>retry individually</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1582,7 +1806,7 @@ export function SwapInterface({
                 <div className="h-4 w-4 text-white" style={{ color: 'white' }}>
                   <div className="circular-dot-spinner"></div>
                 </div>
-                <span className="text-xs sm:text-m">{getActionVerb}ing... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
+                <span className="text-xs sm:text-m">{isLiquidation ? 'liquidating' : 'swapping pro rata'}... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
               </>
             ) : (
               <>

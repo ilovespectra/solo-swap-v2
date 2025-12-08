@@ -5,9 +5,6 @@ const HELIUS_RPC_URL = process.env.NEXT_PUBLIC_HELIUS_API_KEY
   ? `https://mainnet.helius-rpc.com/?api-key=${process.env.NEXT_PUBLIC_HELIUS_API_KEY}`
   : 'https://mainnet.helius-rpc.com/';
 
-// Optional fallback RPC to mitigate rate limits (set NEXT_PUBLIC_SOLANA_RPC_FALLBACK)
-const RPC_FALLBACK_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_FALLBACK?.trim();
-
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 

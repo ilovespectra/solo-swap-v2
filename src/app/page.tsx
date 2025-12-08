@@ -11,7 +11,7 @@ import { SwapInterface } from './components/SwapInterface';
 import { MultisigAnalyzer } from './components/enterWallet';
 import { Settings2, Wallet, Menu, X, Calculator, Search, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
-import { collection, doc, setDoc, getDocs, query, orderBy, limit, Timestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, query, orderBy, limit, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { encryptionService } from './lib/encryption';
 import { HistoricalPortfolio } from './components/ViewHistory';
@@ -44,6 +44,7 @@ export default function Home() {
   const [updatedTokens, setUpdatedTokens] = useState<Set<string>>(new Set());
   const lastHistoryUiUpdate = useRef<number>(0);
   const lastFirestoreWrite = useRef<number>(0);
+  const lastCleanupRun = useRef<number>(0);
   const isInitialLoad = useRef(true);
   const subscriptionsSetup = useRef(false);
 
@@ -143,6 +144,149 @@ const loadPortfolioHistory = useCallback(async () => {
   }
 }, [publicKey]);
 
+const bucketizeRecords = useCallback(
+  (records: PortfolioHistory[], bucketMs: number, startTime: number, endTime: number): PortfolioHistory[] => {
+    const buckets = new Map<number, { totalValue: number; walletCount: number; tokenCount: number; count: number }>();
+
+    records.forEach((record) => {
+      const ts = record.timestamp.getTime();
+      if (ts < startTime || ts >= endTime) return;
+      const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+      const existing = buckets.get(bucketStart) || { totalValue: 0, walletCount: 0, tokenCount: 0, count: 0 };
+      buckets.set(bucketStart, {
+        totalValue: existing.totalValue + record.totalValue,
+        walletCount: existing.walletCount + record.walletCount,
+        tokenCount: existing.tokenCount + record.tokenCount,
+        count: existing.count + 1,
+      });
+    });
+
+    return Array.from(buckets.entries()).map(([bucketStart, agg]) => ({
+      timestamp: new Date(bucketStart),
+      totalValue: agg.totalValue / agg.count,
+      walletCount: Math.round(agg.walletCount / agg.count),
+      tokenCount: Math.round(agg.tokenCount / agg.count),
+    }));
+  },
+  [],
+);
+
+const cleanupPortfolioHistory = useCallback(async () => {
+  if (!publicKey) return;
+
+  const nowMs = Date.now();
+  const throttleMs = 60000; // avoid hammering Firestore on rapid consecutive writes
+  if (nowMs - lastCleanupRun.current < throttleMs) {
+    return;
+  }
+
+  const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
+  const recordsRef = collection(db, 'wallet-history', anonymizedKey, 'records');
+  const snapshot = await getDocs(query(recordsRef, orderBy('timestamp', 'asc')));
+
+  if (snapshot.empty) {
+    lastCleanupRun.current = nowMs;
+    return;
+  }
+
+  const decryptedRecords: PortfolioHistory[] = [];
+
+  snapshot.forEach((docSnap) => {
+    const data = docSnap.data() as {
+      encryptedData?: {
+        totalValue: string;
+        walletCount: string;
+        tokenCount: string;
+      };
+      timestamp?: Timestamp;
+    };
+
+    if (!data.encryptedData) return;
+
+    try {
+      const totalValue = encryptionService.decryptData<number>(data.encryptedData.totalValue, publicKey.toString());
+      const walletCount = encryptionService.decryptData<number>(data.encryptedData.walletCount, publicKey.toString());
+      const tokenCount = encryptionService.decryptData<number>(data.encryptedData.tokenCount, publicKey.toString());
+
+      if (totalValue === null || walletCount === null || tokenCount === null) return;
+
+      const ts = data.timestamp instanceof Timestamp
+        ? data.timestamp.toDate()
+        : data.timestamp
+          ? new Date(data.timestamp)
+          : new Date();
+
+      decryptedRecords.push({
+        timestamp: ts,
+        totalValue,
+        walletCount,
+        tokenCount,
+      });
+    } catch (err) {
+      console.error('cleanup decrypt error:', err);
+    }
+  });
+
+  if (decryptedRecords.length === 0) {
+    lastCleanupRun.current = nowMs;
+    return;
+  }
+
+  const hourMs = 60 * 60 * 1000;
+  const dayMs = 24 * hourMs;
+  const weekMs = 7 * dayMs;
+  const monthMs = 30 * dayMs;
+
+  const recentCutoff = nowMs - hourMs; // keep 30-second granularity within the last hour
+  const weekCutoff = nowMs - weekMs;
+  const monthCutoff = nowMs - monthMs;
+
+  const recentRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
+  const minuteReduced = bucketizeRecords(decryptedRecords, 60_000, weekCutoff, recentCutoff); // 1 per minute for >1h to 1w
+  const hourlyReduced = bucketizeRecords(decryptedRecords, 60 * 60 * 1000, monthCutoff, weekCutoff); // 1 per hour for >1w to 1m
+  const multiDayReduced = bucketizeRecords(decryptedRecords, 4 * dayMs, 0, monthCutoff); // 1 per 4 days for >1m
+
+  const finalRecords = [...multiDayReduced, ...hourlyReduced, ...minuteReduced, ...recentRecords]
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  const batch = writeBatch(db);
+  snapshot.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+
+  finalRecords.forEach((record) => {
+    const encryptedData = {
+      totalValue: encryptionService.encryptData(record.totalValue, publicKey.toString()),
+      walletCount: encryptionService.encryptData(record.walletCount, publicKey.toString()),
+      tokenCount: encryptionService.encryptData(record.tokenCount, publicKey.toString()),
+      randomField1: encryptionService.generateRandomEncrypted(publicKey.toString()),
+      randomField2: encryptionService.generateRandomEncrypted(publicKey.toString()),
+    };
+
+    const docRef = doc(collection(db, 'wallet-history', anonymizedKey, 'records'));
+    const bucketSizeMs = record.timestamp.getTime() < monthCutoff
+      ? 4 * dayMs
+      : record.timestamp.getTime() < weekCutoff
+        ? 60 * 60 * 1000
+        : record.timestamp.getTime() < recentCutoff
+          ? 60_000
+          : 30_000;
+
+    batch.set(docRef, {
+      timestamp: Timestamp.fromDate(record.timestamp),
+      publicKey: publicKey.toString(),
+      encryptedData,
+      metadata: {
+        hasData: true,
+        recordCount: 1,
+        version: '1.1',
+        bucketSizeMs,
+      },
+    });
+  });
+
+  await batch.commit();
+  lastCleanupRun.current = Date.now();
+}, [publicKey, bucketizeRecords]);
+
 const savePortfolioHistory = useCallback(async (totalValue: number, walletCount: number, tokenCount: number) => {
   if (!publicKey) {
     console.error('no public key - cannot save wallet history');
@@ -170,7 +314,7 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       metadata: {
         hasData: true,
         recordCount: tokenCount > 0 ? 1 : 0,
-        version: '1.0'
+        version: '1.1'
       }
     };
 
@@ -191,10 +335,12 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       lastHistoryUiUpdate.current = now;
     }
 
+    await cleanupPortfolioHistory();
+
   } catch (error) {
     console.error('failed to save encrypted wallet history:', error);
   }
-}, [publicKey]);
+}, [publicKey, cleanupPortfolioHistory]);
 
   useEffect(() => {
     if (connected && publicKey) {

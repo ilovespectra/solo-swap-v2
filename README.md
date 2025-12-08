@@ -100,7 +100,7 @@ environment configuration
     NEXT_PUBLIC_HELIUS_API_KEY=heliusapikey
     NEXT_PUBLIC_RPC_ENDPOINT_1="quicknode-rpc-url-with-api-key"
     NEXT_PUBLIC_RPC_ENDPOINT_2="helius-rpc-url-with-api-key"
-
+ 
     NEXT_PUBLIC_FIREBASE_API_KEY=""
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=""
     NEXT_PUBLIC_FIREBASE_PROJECT_ID=""

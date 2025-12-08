@@ -134,7 +134,7 @@ swap history + sell indicators require firebase firestore:
     # or
     bun dev
     ```
-
+ 
 5. open application
 
     navigate to http://localhost:3000 in your browser

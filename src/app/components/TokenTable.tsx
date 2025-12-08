@@ -11,6 +11,95 @@ import { CSS } from '@dnd-kit/utilities';
 import { ColumnConfig, SortField } from '../types/table';
 import { useColumnState } from '../hooks/useColumnState';
 
+const createThrottledFunction = <T extends (...args: any[]) => any>(
+  func: T,
+  limit: number
+): ((...args: Parameters<T>) => Promise<ReturnType<T>>) => {
+  let lastCall = 0;
+  const pendingCall: ReturnType<T> | null = null;
+  
+  return async (...args: Parameters<T>): Promise<ReturnType<T>> => {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCall;
+    
+    if (timeSinceLastCall < limit) {
+      // Wait before making the next call
+      await new Promise(resolve => setTimeout(resolve, limit - timeSinceLastCall));
+    }
+    
+    lastCall = Date.now();
+    return func(...args);
+  };
+};
+
+// Add this custom hook near your other hooks
+const useRequestQueue = () => {
+  const queueRef = useRef<Array<() => Promise<any>>>([]);
+  const isProcessingRef = useRef(false);
+  
+  const processQueue = async () => {
+    if (isProcessingRef.current || queueRef.current.length === 0) return;
+    
+    isProcessingRef.current = true;
+    
+    while (queueRef.current.length > 0) {
+      const task = queueRef.current.shift();
+      if (task) {
+        try {
+          await task();
+        } catch (error) {
+          console.error('Queue task failed:', error);
+        }
+        // Wait 500ms between requests to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    isProcessingRef.current = false;
+  };
+  
+  const enqueueRequest = (request: () => Promise<any>) => {
+    queueRef.current.push(request);
+    if (!isProcessingRef.current) {
+      processQueue();
+    }
+  };
+  
+  return { enqueueRequest };
+};
+
+// Add error boundary component
+const TokenTableErrorBoundary = ({ children }: { children: React.ReactNode }) => {
+  const [hasError, setHasError] = useState(false);
+  
+  useEffect(() => {
+    const handleError = (error: ErrorEvent) => {
+      console.error('TokenTable error:', error);
+      setHasError(true);
+    };
+    
+    window.addEventListener('error', handleError);
+    return () => window.removeEventListener('error', handleError);
+  }, []);
+  
+  if (hasError) {
+    return (
+      <div className="p-6 text-center text-secondary">
+        <div className="text-lg font-semibold mb-2">temporary issue</div>
+        <div className="text-sm">please try again in a moment</div>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 px-4 py-2 bg-secondary hover:bg-primary transition-colors"
+        >
+          reload
+        </button>
+      </div>
+    );
+  }
+  
+  return <>{children}</>;
+};
+
 interface TokenTableProps {
   tokens: TokenBalance[];
   loading: boolean;
@@ -312,7 +401,7 @@ export function ResizableTableHeader({
       key={column.id}
       style={{ width: `${column.width}px`, background: 'var(--bg-tertiary)' }}
       className="relative py-3 sm:py-4 px-2 sm:px-4 group select-none"
-                     >
+    >
       <div className="flex items-center justify-between h-full">
 
         <div className="flex items-center space-x-2 flex-1 h-full">
@@ -455,6 +544,8 @@ export function TokenTable({
   const [hideZeroValueTokens, setHideZeroValueTokens] = useState(true);
   const [isMobileView, setIsMobileView] = useState(false);
 
+  const { enqueueRequest } = useRequestQueue(); // Add this line
+
   useEffect(() => {
     const checkMobileView = () => {
       setIsMobileView(window.innerWidth < 700);
@@ -466,30 +557,30 @@ export function TokenTable({
     return () => window.removeEventListener('resize', checkMobileView);
   }, []);
   
-const {
+  const {
     columns,
     updateColumnWidth,
     toggleColumnVisibility,
     reorderColumns,
     resetColumns,
-   } = useColumnState();
+  } = useColumnState();
 
   const sensors = useSensors(
-  useSensor(PointerSensor, {
-    activationConstraint: {
-      distance: 3,
-    },
-  }),
-  useSensor(TouchSensor, {
-    activationConstraint: {
-      delay: 150,
-      tolerance: 8,
-    },
-  }),
-  useSensor(KeyboardSensor, {
-    coordinateGetter: sortableKeyboardCoordinates,
-  })
-);
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 150,
+        tolerance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   useEffect(() => {
     setIsMounted(true);
@@ -566,22 +657,44 @@ const {
     }
   };
 
+  useEffect(() => {
+    // Log when the component mounts and makes initial requests
+    console.log('TokenTable mounted on Vercel:', {
+      isVercel: process.env.NEXT_PUBLIC_VERCEL_ENV === 'production',
+      tokenCount: tokens.length,
+      failedTokenCount: failedTokens.length,
+      time: new Date().toISOString()
+    });
+  }, []);
+
+  useEffect(() => {
+    // Track retry attempts
+    if (retryLoading) {
+      console.log('Retry started:', {
+        time: new Date().toISOString(),
+        failedCount: failedTokens.length
+      });
+    }
+  }, [retryLoading, failedTokens.length]);
+
   const handleRetryFailedTokens = async () => {
     if (failedTokens.length === 0 || retryLoading) return;
     
     setRetryLoading(true);
     setRetryProgress({ current: 0, total: failedTokens.length });
     
-    try {
-      if (onRefreshPrices) {
-        onRefreshPrices();
+    enqueueRequest(async () => {
+      try {
+        if (onRefreshPrices) {
+          await onRefreshPrices();
+        }
+      } catch (error) {
+        console.error('failed to retry tokens:', error);
+      } finally {
+        setRetryLoading(false);
+        setRetryProgress({ current: 0, total: 0 });
       }
-    } catch (error) {
-      console.error('failed to retry tokens:', error);
-    } finally {
-      setRetryLoading(false);
-      setRetryProgress({ current: 0, total: 0 });
-    }
+    });
   };
 
   const isRetryLoading = retryLoading && retryProgress.total > 0;
@@ -982,14 +1095,6 @@ const {
           </div>
         )}
 
-                {/* <div className="sm:hidden text-center text-xs text-gray-500 pt-3 pb-2 border-t border-gray-700/30 mt-2">
-          <div className="flex items-center justify-center space-x-2">
-            <div className="w-1 h-1 bg-gray-500 "></div>
-            <span>scroll horizontally to view all columns</span>
-            <div className="w-1 h-1 bg-gray-500 "></div>
-          </div>
-        </div> */}
-
       </CollapsibleSection>
 
       {showColumnPanel && (
@@ -1052,7 +1157,15 @@ const {
           </div>
         </div>
       )}
-      
     </div>
+  );
+}
+
+// Export wrapped component with error boundary
+export default function TokenTableWrapper(props: TokenTableProps) {
+  return (
+    <TokenTableErrorBoundary>
+      <TokenTable {...props} />
+    </TokenTableErrorBoundary>
   );
 }

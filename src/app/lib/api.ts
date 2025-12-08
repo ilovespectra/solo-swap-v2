@@ -1,10 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { TokenBalance, TokenInfo, PriceProgress } from '../types/token';
 
-const HELIUS_RPC_URL = process.env.NEXT_PUBLIC_HELIUS_API_KEY 
-  ? `https://mainnet.helius-rpc.com/?api-key=${process.env.NEXT_PUBLIC_HELIUS_API_KEY}`
-  : 'https://mainnet.helius-rpc.com/';
-
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -66,8 +62,6 @@ interface JupiterPriceResponse {
   };
 }
 
-
-
 export class TokenService {
   private static instance: TokenService | null = null;
   private tokenMap: Map<string, TokenInfo> = new Map();
@@ -82,6 +76,10 @@ export class TokenService {
   private pendingPriceRequests: Map<string, Promise<{ price: number; changePercent24h?: number } | null>> = new Map();
 
   private constructor() {
+    console.log('TokenService initialized - Environment check:', {
+      hasApiKey: !!process.env.NEXT_PUBLIC_HELIUS_API_KEY,
+      apiKeyLength: process.env.NEXT_PUBLIC_HELIUS_API_KEY?.length
+    });
     this.loadTokenList();
   }
 
@@ -92,8 +90,17 @@ export class TokenService {
     return TokenService.instance;
   }
 
+  // Getter function for Helius RPC URL - constructed at call time
+  private getHeliusRpcUrl(): string {
+    const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
+    if (apiKey) {
+      return `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+    }
+    return 'https://mainnet.helius-rpc.com/';
+  }
+
   private createConnection(): Connection {
-    return new Connection(HELIUS_RPC_URL, 'confirmed');
+    return new Connection(this.getHeliusRpcUrl(), 'confirmed');
   }
 
   public getConnection(): Connection {
@@ -119,6 +126,7 @@ export class TokenService {
         return;
       }
     } catch (error) {
+      console.error('Failed to load token list from Jupiter:', error);
     }
 
     const fallbackTokens = [
@@ -175,7 +183,6 @@ export class TokenService {
     callbacks.push(callback);
 
     if (!this.batchUpdateInterval) {
-
       this.batchUpdatePrices();
       
       this.batchUpdateInterval = setInterval(async () => {
@@ -322,7 +329,7 @@ export class TokenService {
       const missingMints = mints.filter(mint => !priceMap.has(mint));
       
       if (missingMints.length > 0) {
-        const heliusResponse = await fetch(HELIUS_RPC_URL, {
+        const heliusResponse = await fetch(this.getHeliusRpcUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -359,33 +366,33 @@ export class TokenService {
         priceMap.set(USDC_MINT, { price: 1, changePercent24h: 0 });
       }
 
-    } catch {
+    } catch (error) {
+      console.error('Failed to fetch batch prices:', error);
     }
 
     return priceMap;
   }
 
-private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; changePercent24h?: number } | null> {
-  try {
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
-    if (response.ok) {
-      const data = await response.json();
-      const pair = data.pairs?.[0];
-      if (pair) {
-        return {
-          price: parseFloat(pair.priceUsd) || 0,
-          changePercent24h: pair.priceChange?.h24 ? parseFloat(pair.priceChange.h24) : undefined
-        };
+  private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; changePercent24h?: number } | null> {
+    try {
+      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+      if (response.ok) {
+        const data = await response.json();
+        const pair = data.pairs?.[0];
+        if (pair) {
+          return {
+            price: parseFloat(pair.priceUsd) || 0,
+            changePercent24h: pair.priceChange?.h24 ? parseFloat(pair.priceChange.h24) : undefined
+          };
+        }
       }
+    } catch (error) {
+      console.error('Failed to fetch price from DexScreener:', error);
     }
-  } catch (error) {
-
+    return null;
   }
-  return null;
-}
 
-    private async fetchSingleTokenPrice(mint: string): Promise<{ price: number; changePercent24h?: number } | null> {
-
+  private async fetchSingleTokenPrice(mint: string): Promise<{ price: number; changePercent24h?: number } | null> {
     const cached = this.priceCache.get(mint);
     if (cached && Date.now() - cached.timestamp < this.PRICE_CACHE_DURATION) {
       return { price: cached.price, changePercent24h: cached.changePercent24h };
@@ -409,11 +416,11 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
           }
         }
       } catch (error) {
-
+        console.error('Failed to fetch price from Jupiter:', error);
       }
 
       try {
-        const response = await fetch(HELIUS_RPC_URL, {
+        const response = await fetch(this.getHeliusRpcUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -447,7 +454,7 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
           }
         }
       } catch (error) {
-
+        console.error('Failed to fetch price from Helius:', error);
       }
 
       const dexscreenerData = await this.fetchPriceFromDexScreener(mint);
@@ -491,18 +498,18 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
     if (solBalance > 0) {
       const solAmount = solBalance / 1e9;
       tokens.push({
-          mint: 'So11111111111111111111111111111111111111112',
-          symbol: 'SOL',
-          name: 'Solana',
-          balance: solBalance,
-          decimals: 9,
-          uiAmount: solAmount,
-          price: 0,
-          value: 0,
-          selected: false,
-          logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-          changePercent24h: null,
-          lastUpdated: Date.now()
+        mint: 'So11111111111111111111111111111111111111112',
+        symbol: 'SOL',
+        name: 'Solana',
+        balance: solBalance,
+        decimals: 9,
+        uiAmount: solAmount,
+        price: 0,
+        value: 0,
+        selected: false,
+        logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+        changePercent24h: null,
+        lastUpdated: Date.now()
       });
     }
 
@@ -511,47 +518,47 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
         try {
           const accountInfo = account.account.data.parsed.info;
           const tokenAmount = accountInfo.tokenAmount;
-            if (tokenAmount.uiAmount > 0) {
-              return accountInfo.mint;
-            }
-          } catch (error) {
-
-          }
-          return null;
-        })
-        .filter((mint: string | null): mint is string => mint !== null);
-
-      const tokenMetadataMap = await this.fetchTokenMetadataBatch(mintAddresses);
-
-      for (const account of tokenAccounts.value as ParsedTokenAccount[]) {
-        try {
-          const accountInfo = account.account.data.parsed.info;
-          const mint = accountInfo.mint;
-          const tokenAmount = accountInfo.tokenAmount;
-          
           if (tokenAmount.uiAmount > 0) {
-            const heliusMetadata = tokenMetadataMap.get(mint);
-            const tokenInfo = this.tokenMap.get(mint);
-            
-            tokens.push({
-                mint: mint,
-                symbol: heliusMetadata?.symbol || tokenInfo?.symbol || 'UNKNOWN',
-                name: heliusMetadata?.name || tokenInfo?.name || 'Unknown Token',
-                balance: Number(tokenAmount.amount),
-                decimals: tokenAmount.decimals,
-                uiAmount: tokenAmount.uiAmount,
-                price: 0,
-                value: 0,
-                selected: false,
-                logoURI: heliusMetadata?.logoURI || tokenInfo?.logoURI || null,
-                changePercent24h: null,
-                lastUpdated: Date.now()
-            });
+            return accountInfo.mint;
           }
         } catch (error) {
-
+          console.error('Error parsing token account:', error);
         }
+        return null;
+      })
+      .filter((mint: string | null): mint is string => mint !== null);
+
+    const tokenMetadataMap = await this.fetchTokenMetadataBatch(mintAddresses);
+
+    for (const account of tokenAccounts.value as ParsedTokenAccount[]) {
+      try {
+        const accountInfo = account.account.data.parsed.info;
+        const mint = accountInfo.mint;
+        const tokenAmount = accountInfo.tokenAmount;
+        
+        if (tokenAmount.uiAmount > 0) {
+          const heliusMetadata = tokenMetadataMap.get(mint);
+          const tokenInfo = this.tokenMap.get(mint);
+          
+          tokens.push({
+            mint: mint,
+            symbol: heliusMetadata?.symbol || tokenInfo?.symbol || 'UNKNOWN',
+            name: heliusMetadata?.name || tokenInfo?.name || 'Unknown Token',
+            balance: Number(tokenAmount.amount),
+            decimals: tokenAmount.decimals,
+            uiAmount: tokenAmount.uiAmount,
+            price: 0,
+            value: 0,
+            selected: false,
+            logoURI: heliusMetadata?.logoURI || tokenInfo?.logoURI || null,
+            changePercent24h: null,
+            lastUpdated: Date.now()
+          });
+        }
+      } catch (error) {
+        console.error('Error processing token account:', error);
       }
+    }
     return tokens;
   }
 
@@ -561,7 +568,7 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
     if (mintAddresses.length === 0) return metadataMap;
 
     try {
-      const response = await fetch(HELIUS_RPC_URL, {
+      const response = await fetch(this.getHeliusRpcUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -589,7 +596,7 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
         }
       }
     } catch (error) {
-
+      console.error('Failed to fetch token metadata from Helius:', error);
     }
 
     return metadataMap;
@@ -599,7 +606,6 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
     tokens: TokenBalance[], 
     onProgress?: (progress: PriceProgress) => void
   ): Promise<TokenBalance[]> {
-    
     if (tokens.length === 0) {
       return [];
     }
@@ -660,7 +666,7 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
       const missingMints = mintAddresses.filter(mint => !priceMap.has(mint));
       
       if (missingMints.length > 0) {
-        const heliusResponse = await fetch(HELIUS_RPC_URL, {
+        const heliusResponse = await fetch(this.getHeliusRpcUrl(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -746,7 +752,7 @@ private async fetchPriceFromDexScreener(mint: string): Promise<{ price: number; 
       
       return allResults;
     } catch (error) {
-      console.error('failed to fetch prices:', error);
+      console.error('Failed to fetch prices:', error);
       return tokens.map(token => ({
         ...token,
         price: 0,

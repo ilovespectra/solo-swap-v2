@@ -206,7 +206,7 @@ export function SwapInterface({
   const [currentStep, setCurrentStep] = useState<string>('');
   const [swapResults, setSwapResults] = useState<SwapResult[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [useJitoBundling, setUseJitoBundling] = useState(true);
+  const [useJitoBundling, setUseJitoBundling] = useState(false);
   const [jitoTipLamports, setJitoTipLamports] = useState<number>(100000);
   const [valueUpdated, setValueUpdated] = useState(false);
   const [failedTokens, setFailedTokens] = useState<ProRataToken[]>([]);

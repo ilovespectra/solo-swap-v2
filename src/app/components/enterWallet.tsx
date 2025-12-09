@@ -2829,6 +2829,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
             <HistoricalPortfolio 
               mode="multisig"
               currentPortfolioValue={totalPortfolioValue}
+              portfolioHistory={portfolioHistory}
             />
           </div>
         )}

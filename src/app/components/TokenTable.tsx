@@ -23,7 +23,6 @@ const createThrottledFunction = <T extends (...args: any[]) => any>(
     const timeSinceLastCall = now - lastCall;
     
     if (timeSinceLastCall < limit) {
-      // Wait before making the next call
       await new Promise(resolve => setTimeout(resolve, limit - timeSinceLastCall));
     }
     
@@ -32,7 +31,6 @@ const createThrottledFunction = <T extends (...args: any[]) => any>(
   };
 };
 
-// Add this custom hook near your other hooks
 const useRequestQueue = () => {
   const queueRef = useRef<Array<() => Promise<any>>>([]);
   const isProcessingRef = useRef(false);
@@ -50,7 +48,6 @@ const useRequestQueue = () => {
         } catch (error) {
           console.error('Queue task failed:', error);
         }
-        // Wait 500ms between requests to avoid rate limits
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -68,7 +65,6 @@ const useRequestQueue = () => {
   return { enqueueRequest };
 };
 
-// Add error boundary component
 const TokenTableErrorBoundary = ({ children }: { children: React.ReactNode }) => {
   const [hasError, setHasError] = useState(false);
   
@@ -544,7 +540,7 @@ export function TokenTable({
   const [hideZeroValueTokens, setHideZeroValueTokens] = useState(true);
   const [isMobileView, setIsMobileView] = useState(false);
 
-  const { enqueueRequest } = useRequestQueue(); // Add this line
+  const { enqueueRequest } = useRequestQueue();
 
   useEffect(() => {
     const checkMobileView = () => {
@@ -1149,7 +1145,6 @@ export function TokenTable({
   );
 }
 
-// Export wrapped component with error boundary
 export default function TokenTableWrapper(props: TokenTableProps) {
   return (
     <TokenTableErrorBoundary>

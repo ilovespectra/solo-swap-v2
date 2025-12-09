@@ -337,7 +337,7 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
   const subscriptionsSetup = useRef(false);
   const lastFirestoreWrite = useRef<number>(0);
   const lastCleanupRun = useRef<number>(0);
-  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
   const [showColumnPanel, setShowColumnPanel] = useState(false);
 
@@ -665,7 +665,6 @@ function ColumnCustomizationPanel({
               return;
             }
           } catch {
-            // ignore cache errors
           }
         }
 
@@ -696,13 +695,19 @@ function ColumnCustomizationPanel({
               publicKey.toString()
             );
 
-            if (decryptedData && decryptedData.timestamp.getTime() >= retentionCutoff) {
-              history.push({
-                timestamp: decryptedData.timestamp,
-                totalValue: decryptedData.totalValue,
-                walletCount: decryptedData.walletCount,
-                tokenCount: decryptedData.tokenCount
-              });
+            if (decryptedData) {
+              const timestamp = decryptedData.timestamp instanceof Date
+                ? decryptedData.timestamp
+                : new Date(decryptedData.timestamp);
+
+              if (!isNaN(timestamp.getTime()) && timestamp.getTime() >= retentionCutoff) {
+                history.push({
+                  timestamp,
+                  totalValue: decryptedData.totalValue,
+                  walletCount: decryptedData.walletCount,
+                  tokenCount: decryptedData.tokenCount
+                });
+              }
             }
           } catch {
           }
@@ -835,7 +840,7 @@ function ColumnCustomizationPanel({
     if (!publicKey) return;
 
     const nowMs = Date.now();
-    const throttleMs = 900000; // 15 minutes to reduce cleanup churn
+    const throttleMs = 900000;
     if (nowMs - lastCleanupRun.current < throttleMs) {
       return;
     }
@@ -1488,8 +1493,10 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       setError(`analysis incomplete: failed to load balances for ${failedWallets.length} wallet${failedWallets.length > 1 ? 's' : ''} (${failedPreview}${failedWallets.length > 3 ? ', ...' : ''}). results not updated to avoid partial totals.`);
       setLoadingProgress(prev => ({
         ...prev,
-        currentProcessed: savedWallets.length
+        currentProcessed: savedWallets.length,
+        isActive: false
       }));
+      setAnalyzing(false);
       return;
     }
 
@@ -1516,8 +1523,10 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
         setError('network error fetching prices. please check your internet connection and try again.');
         setLoadingProgress(prev => ({
           ...prev,
-          currentProcessed: savedWallets.length
+          currentProcessed: savedWallets.length,
+          isActive: false
         }));
+        setAnalyzing(false);
         return;
       }
     }
@@ -1603,11 +1612,12 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
     
   } catch (err) {
     setError(`failed to analyze some wallets: ${err instanceof Error ? err.message : 'unknown error'}`);
+    setLoadingProgress(prev => ({ ...prev, isActive: false }));
   } finally {
     setAnalyzing(false);
     setTimeout(() => {
       setLoadingProgress(prev => ({ ...prev, isActive: false }));
-    }, 2000);
+    }, 1000);
   }
 }, [loadingProgress.isActive, savePortfolioHistory, savedWallets, tokenService, updateWalletLastAnalyzed]);
 
@@ -2826,6 +2836,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
               )}
             </CollapsibleSection>
 
+            {/* Historical Chart - shown when results exist */}
             <HistoricalPortfolio 
               mode="multisig"
               currentPortfolioValue={totalPortfolioValue}
@@ -2834,7 +2845,18 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
           </div>
         )}
 
-        {portfolioHistory.length === 0 && chartDataLoaded && (
+        {/* Historical Chart - shown when no results but has saved wallets and history */}
+        {results.length === 0 && savedWallets.length > 0 && portfolioHistory.length > 0 && chartDataLoaded && (
+          <div className="space-y-6">
+            <HistoricalPortfolio 
+              mode="multisig"
+              currentPortfolioValue={lastLoadedPortfolioValue}
+              portfolioHistory={portfolioHistory}
+            />
+          </div>
+        )}
+
+        {portfolioHistory.length === 0 && chartDataLoaded && savedWallets.length > 0 && results.length === 0 && (
           <div className="text-center py-12" style={{ color: 'var(--text-secondary)' }}>
             <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 flex items-center justify-center" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
               <Clock className="h-8 w-8 sm:h-10 sm:w-10" />

@@ -62,7 +62,6 @@ interface JupiterPriceResponse {
   };
 }
 
-// Utility to process large mint lists without overflowing provider limits
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   if (chunkSize <= 0) return [items];
   const chunks: T[][] = [];
@@ -320,6 +319,7 @@ export class TokenService {
 
     try {
       const jupiterIds = mints.join(',');
+      
       const jupiterResponse = await fetch(`https://api.jup.ag/price/v2?ids=${jupiterIds}`);
       
       if (jupiterResponse.ok) {

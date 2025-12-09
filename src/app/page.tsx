@@ -48,7 +48,6 @@ export default function Home() {
   const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const isInitialLoad = useRef(true);
   const subscriptionsSetup = useRef(false);
-  const [isSwapHistoryOpen, setIsSwapHistoryOpen] = useState(false);
 
   const {
     columns,
@@ -812,10 +811,7 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
 
           {currentView === 'main' && (
             <div className="mt-0 sm:mt-8 space-y-0 sm:space-y-6">
-              <SwapHistoryPanel 
-                isOpen={isSwapHistoryOpen}
-                onToggle={() => setIsSwapHistoryOpen(!isSwapHistoryOpen)}
-              />
+              <SwapHistoryPanel />
               {/* <HistoricalPortfolio /> */}
             </div>
           )}

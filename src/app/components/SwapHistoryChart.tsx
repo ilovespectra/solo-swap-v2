@@ -34,6 +34,8 @@ interface SwapHistoryChartProps {
   summary?: HistorySummaryPoint[];
   sellIndicators: SellIndicator[];
   isLoading?: boolean;
+  isOpen?: boolean;
+  onToggle?: () => void;
 }
 
 export function SwapHistoryChart({

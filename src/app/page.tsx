@@ -45,8 +45,10 @@ export default function Home() {
   const lastHistoryUiUpdate = useRef<number>(0);
   const lastFirestoreWrite = useRef<number>(0);
   const lastCleanupRun = useRef<number>(0);
+  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
   const isInitialLoad = useRef(true);
   const subscriptionsSetup = useRef(false);
+  const [isSwapHistoryOpen, setIsSwapHistoryOpen] = useState(false);
 
   const {
     columns,
@@ -88,6 +90,21 @@ const loadPortfolioHistory = useCallback(async () => {
   if (!publicKey) return;
 
   try {
+    const cacheKey = `wallet-history-cache-${publicKey.toString()}`;
+    const cached = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as { ts: number; data: PortfolioHistory[] };
+        if (Date.now() - parsed.ts < HISTORY_CACHE_TTL_MS && Array.isArray(parsed.data)) {
+          const normalized = parsed.data.map(r => ({ ...r, timestamp: new Date(r.timestamp) }));
+          setCurrentPortfolioData(normalized);
+          return;
+        }
+      } catch {
+        // ignore cache parse errors
+      }
+    }
+
     const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
     const historyQuery = query(
       collection(db, 'wallet-history', anonymizedKey, 'records'),
@@ -95,6 +112,11 @@ const loadPortfolioHistory = useCallback(async () => {
     );
     const querySnapshot = await getDocs(historyQuery);
     
+    const nowMs = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const retentionMs = 90 * dayMs;
+    const retentionCutoff = nowMs - retentionMs;
+
     const history = querySnapshot.docs
       .map(doc => {
         const data = doc.data() as {
@@ -125,6 +147,10 @@ const loadPortfolioHistory = useCallback(async () => {
               ? new Date(data.timestamp)
               : new Date();
 
+          if (ts.getTime() < retentionCutoff) {
+            return null;
+          }
+
           return {
             timestamp: ts,
             totalValue: decryptedTotalValue,
@@ -137,12 +163,17 @@ const loadPortfolioHistory = useCallback(async () => {
         }
       })
       .filter(record => record !== null && record.totalValue > 0) as PortfolioHistory[];
+
     const sortedHistory = [...history].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     setCurrentPortfolioData(sortedHistory);
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: sortedHistory }));
+    }
   } catch (err) {
     console.error('failed to load encrypted wallet history:', err);
   }
-}, [publicKey]);
+}, [publicKey, HISTORY_CACHE_TTL_MS]);
 
 const bucketizeRecords = useCallback(
   (records: PortfolioHistory[], bucketMs: number, startTime: number, endTime: number): PortfolioHistory[] => {
@@ -175,7 +206,7 @@ const cleanupPortfolioHistory = useCallback(async () => {
   if (!publicKey) return;
 
   const nowMs = Date.now();
-  const throttleMs = 60000; // avoid hammering Firestore on rapid consecutive writes
+  const throttleMs = 900000; // 15 minutes: reduce cleanup churn
   if (nowMs - lastCleanupRun.current < throttleMs) {
     return;
   }
@@ -236,15 +267,20 @@ const cleanupPortfolioHistory = useCallback(async () => {
   const dayMs = 24 * hourMs;
   const weekMs = 7 * dayMs;
   const monthMs = 30 * dayMs;
+  const retentionMs = 90 * dayMs;
+
+  const retentionCutoff = nowMs - retentionMs;
 
   const recentCutoff = nowMs - hourMs; // keep 30-second granularity within the last hour
   const weekCutoff = nowMs - weekMs;
   const monthCutoff = nowMs - monthMs;
 
-  const recentRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
-  const minuteReduced = bucketizeRecords(decryptedRecords, 60_000, weekCutoff, recentCutoff); // 1 per minute for >1h to 1w
-  const hourlyReduced = bucketizeRecords(decryptedRecords, 60 * 60 * 1000, monthCutoff, weekCutoff); // 1 per hour for >1w to 1m
-  const multiDayReduced = bucketizeRecords(decryptedRecords, 4 * dayMs, 0, monthCutoff); // 1 per 4 days for >1m
+  const filteredRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= retentionCutoff);
+
+  const recentRecords = filteredRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
+  const minuteReduced = bucketizeRecords(filteredRecords, 60_000, weekCutoff, recentCutoff); // 1 per minute for >1h to 1w
+  const hourlyReduced = bucketizeRecords(filteredRecords, 60 * 60 * 1000, monthCutoff, weekCutoff); // 1 per hour for >1w to 1m
+  const multiDayReduced = bucketizeRecords(filteredRecords, 4 * dayMs, 0, monthCutoff); // 1 per 4 days for >1m
 
   const finalRecords = [...multiDayReduced, ...hourlyReduced, ...minuteReduced, ...recentRecords]
     .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -299,6 +335,25 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
 
   try {
     const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
+
+    const nowMs = Date.now();
+    const hourMs = 60 * 60 * 1000;
+    const dayMs = 24 * hourMs;
+    const weekMs = 7 * dayMs;
+    const monthMs = 30 * dayMs;
+
+    const bucketSizeMs = nowMs >= (nowMs - hourMs)
+      ? 30_000
+      : nowMs >= (nowMs - weekMs)
+        ? 60_000
+        : nowMs >= (nowMs - monthMs)
+          ? 60 * 60 * 1000
+          : 4 * dayMs;
+
+    const bucketStart = Math.floor(nowMs / bucketSizeMs) * bucketSizeMs;
+    const bucketDate = new Date(bucketStart);
+    const docId = `bucket-${bucketSizeMs}-${bucketStart}`;
+
     const encryptedData = {
       totalValue: encryptionService.encryptData(totalValue, publicKey.toString()),
       walletCount: encryptionService.encryptData(walletCount, publicKey.toString()),
@@ -308,17 +363,18 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
     };
 
     const historyData = {
-      timestamp: Timestamp.fromDate(new Date()),
+      timestamp: Timestamp.fromDate(bucketDate),
       publicKey: publicKey.toString(),
-      encryptedData: encryptedData,
+      encryptedData,
       metadata: {
         hasData: true,
         recordCount: tokenCount > 0 ? 1 : 0,
-        version: '1.1'
+        version: '1.1',
+        bucketSizeMs,
       }
     };
 
-    const historyRef = doc(collection(db, 'wallet-history', anonymizedKey, 'records'));
+    const historyRef = doc(collection(db, 'wallet-history', anonymizedKey, 'records'), docId);
     await setDoc(historyRef, historyData);
 
     const now = Date.now();
@@ -326,21 +382,19 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
       setCurrentPortfolioData(prev => [
         ...prev,
         {
-          timestamp: historyData.timestamp.toDate(),
-          totalValue: totalValue,
-          walletCount: walletCount,
-          tokenCount: tokenCount
+          timestamp: bucketDate,
+          totalValue,
+          walletCount,
+          tokenCount
         }
       ]);
       lastHistoryUiUpdate.current = now;
     }
 
-    await cleanupPortfolioHistory();
-
   } catch (error) {
     console.error('failed to save encrypted wallet history:', error);
   }
-}, [publicKey, cleanupPortfolioHistory]);
+}, [publicKey]);
 
   useEffect(() => {
     if (connected && publicKey) {
@@ -501,7 +555,7 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
         }, 800);
 
         const now = Date.now();
-        if (now - lastFirestoreWrite.current > 30000) {
+        if (now - lastFirestoreWrite.current > 180000) {
           lastFirestoreWrite.current = now;
           setTokens(currentTokens => {
             const totalValue = currentTokens.reduce((sum, token) => sum + (token.value || 0), 0);
@@ -758,7 +812,10 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
 
           {currentView === 'main' && (
             <div className="mt-0 sm:mt-8 space-y-0 sm:space-y-6">
-              <SwapHistoryPanel />
+              <SwapHistoryPanel 
+                isOpen={isSwapHistoryOpen}
+                onToggle={() => setIsSwapHistoryOpen(!isSwapHistoryOpen)}
+              />
               {/* <HistoricalPortfolio /> */}
             </div>
           )}

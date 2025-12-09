@@ -658,22 +658,10 @@ export function TokenTable({
   };
 
   useEffect(() => {
-    // Log when the component mounts and makes initial requests
-    console.log('TokenTable mounted on Vercel:', {
-      isVercel: process.env.NEXT_PUBLIC_VERCEL_ENV === 'production',
-      tokenCount: tokens.length,
-      failedTokenCount: failedTokens.length,
-      time: new Date().toISOString()
-    });
   }, []);
 
   useEffect(() => {
-    // Track retry attempts
     if (retryLoading) {
-      console.log('Retry started:', {
-        time: new Date().toISOString(),
-        failedCount: failedTokens.length
-      });
     }
   }, [retryLoading, failedTokens.length]);
 

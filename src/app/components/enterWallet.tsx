@@ -17,7 +17,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { 
   collection, doc, setDoc, getDoc, getDocs, deleteDoc, 
-  query, orderBy, Timestamp 
+  query, orderBy, Timestamp, writeBatch 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import Papa from 'papaparse';
@@ -336,6 +336,8 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
   const [updatedWallets, setUpdatedWallets] = useState<Set<string>>(new Set());
   const subscriptionsSetup = useRef(false);
   const lastFirestoreWrite = useRef<number>(0);
+  const lastCleanupRun = useRef<number>(0);
+  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   const [showColumnPanel, setShowColumnPanel] = useState(false);
 
@@ -652,6 +654,21 @@ function ColumnCustomizationPanel({
 
     const loadPortfolioHistory = async () => {
       try {
+        const cacheKey = `portfolio-history-cache-${publicKey.toString()}`;
+        const cached = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as { ts: number; data: PortfolioHistory[] };
+            if (Date.now() - parsed.ts < HISTORY_CACHE_TTL_MS && Array.isArray(parsed.data)) {
+              setPortfolioHistory(parsed.data.map(r => ({ ...r, timestamp: new Date(r.timestamp) })));
+              setChartDataLoaded(true);
+              return;
+            }
+          } catch {
+            // ignore cache errors
+          }
+        }
+
         const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
         const historyQuery = query(
           collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'),
@@ -659,6 +676,11 @@ function ColumnCustomizationPanel({
         );
         const querySnapshot = await getDocs(historyQuery);
         
+        const nowMs = Date.now();
+        const dayMs = 24 * 60 * 60 * 1000;
+        const retentionMs = 90 * dayMs;
+        const retentionCutoff = nowMs - retentionMs;
+
         const history: PortfolioHistory[] = [];
 
         for (const doc of querySnapshot.docs) {
@@ -674,7 +696,7 @@ function ColumnCustomizationPanel({
               publicKey.toString()
             );
 
-            if (decryptedData) {
+            if (decryptedData && decryptedData.timestamp.getTime() >= retentionCutoff) {
               history.push({
                 timestamp: decryptedData.timestamp,
                 totalValue: decryptedData.totalValue,
@@ -690,6 +712,10 @@ function ColumnCustomizationPanel({
         
         setPortfolioHistory(history);
         setChartDataLoaded(true);
+
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: history }));
+        }
 
       } catch {
         setChartDataLoaded(true);
@@ -778,6 +804,146 @@ function ColumnCustomizationPanel({
     }
   };
 
+  const bucketizeRecords = useCallback(
+    (records: PortfolioHistory[], bucketMs: number, startTime: number, endTime: number): PortfolioHistory[] => {
+      const buckets = new Map<number, { totalValue: number; walletCount: number; tokenCount: number; count: number }>();
+
+      records.forEach((record) => {
+        const ts = record.timestamp.getTime();
+        if (ts < startTime || ts >= endTime) return;
+        const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+        const existing = buckets.get(bucketStart) || { totalValue: 0, walletCount: 0, tokenCount: 0, count: 0 };
+        buckets.set(bucketStart, {
+          totalValue: existing.totalValue + record.totalValue,
+          walletCount: existing.walletCount + record.walletCount,
+          tokenCount: existing.tokenCount + record.tokenCount,
+          count: existing.count + 1,
+        });
+      });
+
+      return Array.from(buckets.entries()).map(([bucketStart, agg]) => ({
+        timestamp: new Date(bucketStart),
+        totalValue: agg.totalValue / agg.count,
+        walletCount: Math.round(agg.walletCount / agg.count),
+        tokenCount: Math.round(agg.tokenCount / agg.count),
+      }));
+    },
+    [],
+  );
+
+  const cleanupPortfolioHistory = useCallback(async () => {
+    if (!publicKey) return;
+
+    const nowMs = Date.now();
+    const throttleMs = 900000; // 15 minutes to reduce cleanup churn
+    if (nowMs - lastCleanupRun.current < throttleMs) {
+      return;
+    }
+
+    const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
+    const recordsRef = collection(db, 'solo-users', anonymizedKey, 'portfolioHistory');
+    const snapshot = await getDocs(query(recordsRef, orderBy('timestamp', 'asc')));
+
+    if (snapshot.empty) {
+      lastCleanupRun.current = nowMs;
+      return;
+    }
+
+    const decryptedRecords: PortfolioHistory[] = [];
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+
+      if (!data.encryptedData) return;
+
+      try {
+        const decryptedData = encryptionService.decryptPortfolioHistory(
+          data.encryptedData,
+          publicKey.toString()
+        );
+
+        if (!decryptedData) return;
+
+        decryptedRecords.push({
+          timestamp: decryptedData.timestamp,
+          totalValue: decryptedData.totalValue,
+          walletCount: decryptedData.walletCount,
+          tokenCount: decryptedData.tokenCount,
+        });
+      } catch (err) {
+        console.error('cleanup decrypt error:', err);
+      }
+    });
+
+    if (decryptedRecords.length === 0) {
+      lastCleanupRun.current = nowMs;
+      return;
+    }
+
+    const hourMs = 60 * 60 * 1000;
+    const dayMs = 24 * hourMs;
+    const weekMs = 7 * dayMs;
+    const monthMs = 30 * dayMs;
+    const retentionMs = 90 * dayMs;
+
+    const retentionCutoff = nowMs - retentionMs;
+
+    const recentCutoff = nowMs - hourMs;
+    const weekCutoff = nowMs - weekMs;
+    const monthCutoff = nowMs - monthMs;
+
+    const filteredRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= retentionCutoff);
+
+    const recentRecords = filteredRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
+    const minuteReduced = bucketizeRecords(filteredRecords, 60_000, weekCutoff, recentCutoff);
+    const hourlyReduced = bucketizeRecords(filteredRecords, 60 * 60 * 1000, monthCutoff, weekCutoff);
+    const multiDayReduced = bucketizeRecords(filteredRecords, 4 * dayMs, 0, monthCutoff);
+
+    const finalRecords = [...multiDayReduced, ...hourlyReduced, ...minuteReduced, ...recentRecords]
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+
+    finalRecords.forEach((record) => {
+      const encryptedData = encryptionService.encryptPortfolioHistory({
+        totalValue: record.totalValue,
+        walletCount: record.walletCount,
+        tokenCount: record.tokenCount,
+        timestamp: record.timestamp,
+      }, publicKey.toString());
+
+      const docRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'));
+      const bucketSizeMs = record.timestamp.getTime() < monthCutoff
+        ? 4 * dayMs
+        : record.timestamp.getTime() < weekCutoff
+          ? 60 * 60 * 1000
+          : record.timestamp.getTime() < recentCutoff
+            ? 60_000
+            : 30_000;
+
+      batch.set(docRef, {
+        timestamp: Timestamp.fromDate(record.timestamp),
+        userId: publicKey.toString(),
+        encryptedData,
+        randomField1: encryptionService.generateRandomEncrypted(publicKey.toString()),
+        randomField2: encryptionService.generateRandomEncrypted(publicKey.toString()),
+        metadata: {
+          hasData: true,
+          recordType: 'portfolio',
+          version: '1.1',
+          bucketSizeMs,
+          walletCountRange: record.walletCount > 10 ? '10+' : '1-10',
+          tokenCountRange: record.tokenCount > 50 ? '50+' : record.tokenCount > 10 ? '10-50' : '1-10'
+        }
+      });
+    });
+
+    await batch.commit();
+    setPortfolioHistory(finalRecords);
+    lastCleanupRun.current = Date.now();
+  }, [publicKey, bucketizeRecords]);
+
   const savePortfolioHistory = useCallback(async (totalValue: number, walletCount: number, tokenCount: number) => {
     if (!publicKey) {
       return;
@@ -801,8 +967,26 @@ function ColumnCustomizationPanel({
         publicKey.toString()
       );
 
+      const nowMs = Date.now();
+      const hourMs = 60 * 60 * 1000;
+      const dayMs = 24 * hourMs;
+      const weekMs = 7 * dayMs;
+      const monthMs = 30 * dayMs;
+
+      const bucketSizeMs = nowMs >= (nowMs - hourMs)
+        ? 30_000
+        : nowMs >= (nowMs - weekMs)
+          ? 60_000
+          : nowMs >= (nowMs - monthMs)
+            ? 60 * 60 * 1000
+            : 4 * dayMs;
+
+      const bucketStart = Math.floor(nowMs / bucketSizeMs) * bucketSizeMs;
+      const bucketDate = new Date(bucketStart);
+      const docId = `bucket-${bucketSizeMs}-${bucketStart}`;
+
       const historyData = {
-        timestamp: Timestamp.fromDate(new Date()),
+        timestamp: Timestamp.fromDate(bucketDate),
         userId: publicKey.toString(),
         encryptedData: encryptedPortfolioData,
         randomField1: encryptionService.generateRandomEncrypted(publicKey.toString()),
@@ -810,19 +994,20 @@ function ColumnCustomizationPanel({
         metadata: {
           hasData: true,
           recordType: 'portfolio',
-          version: '1.0',
+          version: '1.1',
+          bucketSizeMs,
           walletCountRange: walletCount > 10 ? '10+' : '1-10',
           tokenCountRange: tokenCount > 50 ? '50+' : tokenCount > 10 ? '10-50' : '1-10'
         }
       };
 
-      const historyRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory')); 
+      const historyRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'), docId); 
       
       await setDoc(historyRef, historyData);
       
       setPortfolioHistory(prev => {
         const newHistory = [...prev, {
-          timestamp: portfolioData.timestamp,
+          timestamp: bucketDate,
           totalValue: portfolioData.totalValue,
           walletCount: portfolioData.walletCount,
           tokenCount: portfolioData.tokenCount
@@ -834,9 +1019,11 @@ function ColumnCustomizationPanel({
         return trimmedHistory;
       });
 
+      await cleanupPortfolioHistory();
+
     } catch {
     }
-  }, [publicKey]);
+  }, [publicKey, cleanupPortfolioHistory]);
 
   useEffect(() => {
     const totalLastValue = savedWallets.reduce((sum, wallet) => sum + (wallet.lastTotalValue || 0), 0);
@@ -1181,7 +1368,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
         const newTotalPortfolioValue = updated.reduce((sum, result) => sum + result.totalValue, 0);
         
         const now = Date.now();
-        if (now - lastFirestoreWrite.current > 30000 && newTotalPortfolioValue > 0) {
+        if (now - lastFirestoreWrite.current > 180000 && newTotalPortfolioValue > 0) {
           lastFirestoreWrite.current = now;
           savePortfolioHistory(newTotalPortfolioValue, updated.length, updated.reduce((sum, r) => sum + r.tokens.length, 0)).catch(err =>
             console.error('Failed to save portfolio history:', err)
@@ -1259,6 +1446,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
   try {
     let failedAnalyses = 0;
+    const failedWallets: string[] = [];
 
     if (!loadingProgress.isActive) {
       setResults([]);
@@ -1287,7 +1475,22 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
         walletBalances.push({ wallet, tokens: tokensWithBalance });
       } catch {
         failedAnalyses++;
+        failedWallets.push(wallet.address);
       }
+    }
+
+    if (failedWallets.length > 0) {
+      const failedPreview = failedWallets
+        .slice(0, 3)
+        .map(addr => `${addr.slice(0, 8)}...${addr.slice(-6)}`)
+        .join(', ');
+
+      setError(`analysis incomplete: failed to load balances for ${failedWallets.length} wallet${failedWallets.length > 1 ? 's' : ''} (${failedPreview}${failedWallets.length > 3 ? ', ...' : ''}). results not updated to avoid partial totals.`);
+      setLoadingProgress(prev => ({
+        ...prev,
+        currentProcessed: savedWallets.length
+      }));
+      return;
     }
 
     const allMints = new Set<string>();
@@ -1304,16 +1507,18 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
     const uniqueTokens = Array.from(tokensByMint.values());
     let tokensWithPrices: TokenBalance[] = [];
-    
+
     if (uniqueTokens.length > 0) {
       try {
         tokensWithPrices = await tokenService.getTokenPrices(uniqueTokens);
-      } catch {
-        tokensWithPrices = uniqueTokens.map(token => ({
-          ...token,
-          value: 0,
-          price: 0
+      } catch (error) {
+        console.error('Error fetching prices:', error);
+        setError('network error fetching prices. please check your internet connection and try again.');
+        setLoadingProgress(prev => ({
+          ...prev,
+          currentProcessed: savedWallets.length
         }));
+        return;
       }
     }
 

@@ -62,6 +62,16 @@ interface JupiterPriceResponse {
   };
 }
 
+// Utility to process large mint lists without overflowing provider limits
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  if (chunkSize <= 0) return [items];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
 export class TokenService {
   private static instance: TokenService | null = null;
   private tokenMap: Map<string, TokenInfo> = new Map();
@@ -645,62 +655,83 @@ export class TokenService {
       const mintAddresses = tokensToFetch.map(t => t.mint);
       const jupiterIds = mintAddresses.join(',');
       
-      const jupiterResponse = await fetch(`https://api.jup.ag/price/v2?ids=${jupiterIds}`);
-      
       const priceMap = new Map<string, { price: number; changePercent24h?: number }>();
       
-      if (jupiterResponse.ok) {
-        const data: JupiterPriceResponse = await jupiterResponse.json();
-        
-        mintAddresses.forEach(mint => {
-          const tokenData = data.data[mint];
-          if (tokenData) {
-            priceMap.set(mint, {
-              price: tokenData.price,
-              changePercent24h: tokenData.priceChangePercent24h
-            });
-          }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      try {
+        const jupiterResponse = await fetch(`https://api.jup.ag/price/v2?ids=${jupiterIds}`, {
+          signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
+        
+        if (jupiterResponse.ok) {
+          const data: JupiterPriceResponse = await jupiterResponse.json();
+          
+          mintAddresses.forEach(mint => {
+            const tokenData = data.data[mint];
+            if (tokenData) {
+              priceMap.set(mint, {
+                price: tokenData.price,
+                changePercent24h: tokenData.priceChangePercent24h
+              });
+            }
+          });
+        }
+      } catch (jupiterError) {
+        console.warn('Jupiter price fetch failed:', jupiterError);
       }
 
       const missingMints = mintAddresses.filter(mint => !priceMap.has(mint));
       
       if (missingMints.length > 0) {
-        const heliusResponse = await fetch(this.getHeliusRpcUrl(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: '1',
-            method: 'getAssetBatch',
-            params: {
-              ids: missingMints
-            }
-          })
-        });
-
-        if (heliusResponse.ok) {
-          const data: { result?: HeliusAsset[] } = await heliusResponse.json();
-          
-          if (Array.isArray(data.result)) {
-            data.result.forEach((asset) => {
-              if (asset && asset.id) {
-                const priceInfo = asset.token_info?.price_info;
-                let changePercent24h: number | undefined;
-                
-                if (priceInfo?.price_change_24h?.percentage !== undefined) {
-                  changePercent24h = priceInfo.price_change_24h.percentage;
-                } else if (priceInfo?.price_change_percentage_24h !== undefined) {
-                  changePercent24h = priceInfo.price_change_percentage_24h;
-                }
-
-                priceMap.set(asset.id, {
-                  price: priceInfo?.price_per_token || 0,
-                  changePercent24h
-                });
+        const heliusController = new AbortController();
+        const heliusTimeoutId = setTimeout(() => heliusController.abort(), 10000);
+        
+        try {
+          const heliusResponse = await fetch(this.getHeliusRpcUrl(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: '1',
+              method: 'getAssetBatch',
+              params: {
+                ids: missingMints
               }
-            });
+            }),
+            signal: heliusController.signal
+          });
+          
+          clearTimeout(heliusTimeoutId);
+
+          if (heliusResponse.ok) {
+            const data: { result?: HeliusAsset[] } = await heliusResponse.json();
+            
+            if (Array.isArray(data.result)) {
+              data.result.forEach((asset) => {
+                if (asset && asset.id) {
+                  const priceInfo = asset.token_info?.price_info;
+                  let changePercent24h: number | undefined;
+                  
+                  if (priceInfo?.price_change_24h?.percentage !== undefined) {
+                    changePercent24h = priceInfo.price_change_24h.percentage;
+                  } else if (priceInfo?.price_change_percentage_24h !== undefined) {
+                    changePercent24h = priceInfo.price_change_percentage_24h;
+                  }
+
+                  priceMap.set(asset.id, {
+                    price: priceInfo?.price_per_token || 0,
+                    changePercent24h
+                  });
+                }
+              });
+            }
           }
+        } catch (heliusError) {
+          console.warn('Helius fallback failed:', heliusError);
         }
       }
 
@@ -752,7 +783,18 @@ export class TokenService {
       
       return allResults;
     } catch (error) {
-      console.error('Failed to fetch prices:', error);
+      const isNetworkError = error instanceof TypeError && error.message.includes('Failed to fetch');
+      const currentRetry = (onProgress as any)?._retryCount || 0;
+
+      if (isNetworkError && currentRetry < 2) {
+        const delayMs = Math.pow(2, currentRetry) * 500;
+        console.warn(`Price fetch network error (attempt ${currentRetry + 1}/3). Retrying in ${delayMs}ms...`, error);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        const retryOnProgress = onProgress ? { ...onProgress, _retryCount: currentRetry + 1 } : undefined;
+        return this.getTokenPrices(tokensToFetch, retryOnProgress as any);
+      }
+
+      console.error('Failed to fetch prices after retries:', error);
       return tokens.map(token => ({
         ...token,
         price: 0,

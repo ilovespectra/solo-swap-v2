@@ -45,7 +45,7 @@ export default function Home() {
   const lastHistoryUiUpdate = useRef<number>(0);
   const lastFirestoreWrite = useRef<number>(0);
   const lastCleanupRun = useRef<number>(0);
-  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
   const isInitialLoad = useRef(true);
   const subscriptionsSetup = useRef(false);
 
@@ -57,7 +57,7 @@ export default function Home() {
     resetColumns,
   } = useColumnState();
   
-  const tokenService = TokenService.getInstance();
+  const tokenService = useMemo(() => TokenService.getInstance(), []);
 
   type SafeLogData = Record<string, unknown>;
 
@@ -100,7 +100,6 @@ const loadPortfolioHistory = useCallback(async () => {
           return;
         }
       } catch {
-        // ignore cache parse errors
       }
     }
 
@@ -205,7 +204,7 @@ const cleanupPortfolioHistory = useCallback(async () => {
   if (!publicKey) return;
 
   const nowMs = Date.now();
-  const throttleMs = 900000; // 15 minutes: reduce cleanup churn
+  const throttleMs = 900000;
   if (nowMs - lastCleanupRun.current < throttleMs) {
     return;
   }
@@ -270,16 +269,16 @@ const cleanupPortfolioHistory = useCallback(async () => {
 
   const retentionCutoff = nowMs - retentionMs;
 
-  const recentCutoff = nowMs - hourMs; // keep 30-second granularity within the last hour
+  const recentCutoff = nowMs - hourMs;
   const weekCutoff = nowMs - weekMs;
   const monthCutoff = nowMs - monthMs;
 
   const filteredRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= retentionCutoff);
 
   const recentRecords = filteredRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
-  const minuteReduced = bucketizeRecords(filteredRecords, 60_000, weekCutoff, recentCutoff); // 1 per minute for >1h to 1w
-  const hourlyReduced = bucketizeRecords(filteredRecords, 60 * 60 * 1000, monthCutoff, weekCutoff); // 1 per hour for >1w to 1m
-  const multiDayReduced = bucketizeRecords(filteredRecords, 4 * dayMs, 0, monthCutoff); // 1 per 4 days for >1m
+  const minuteReduced = bucketizeRecords(filteredRecords, 60_000, weekCutoff, recentCutoff);
+  const hourlyReduced = bucketizeRecords(filteredRecords, 60 * 60 * 1000, monthCutoff, weekCutoff);
+  const multiDayReduced = bucketizeRecords(filteredRecords, 4 * dayMs, 0, monthCutoff);
 
   const finalRecords = [...multiDayReduced, ...hourlyReduced, ...minuteReduced, ...recentRecords]
     .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -406,10 +405,10 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
   const fetchTokenBalances = useCallback(async () => {
   if (!publicKey) return;
   
-  setLoading(true);
   setError('');
   setProcessingProgress(0);
   setTotalToProcess(0);
+  setLoading(true);
   
   try {
     const tokenBalances = await tokenService.getTokenBalances(publicKey.toString());
@@ -445,13 +444,14 @@ const savePortfolioHistory = useCallback(async (totalValue: number, walletCount:
   const handleRefreshPrices = useCallback(async () => {
   if (!publicKey || tokens.length === 0) return;
   
-  setLoading(true);
+  const tokensWithPositiveBalance = tokens.filter(token => token.uiAmount > 0);
+  
   setProcessingProgress(0);
+  setTotalToProcess(tokensWithPositiveBalance.length);
   setError('');
+  setLoading(true);
   
   try {
-    const tokensWithPositiveBalance = tokens.filter(token => token.uiAmount > 0);
-    setTotalToProcess(tokensWithPositiveBalance.length);
     
     const refreshedTokens = await tokenService.getTokenPrices(
       tokensWithPositiveBalance,

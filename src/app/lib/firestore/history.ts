@@ -97,18 +97,28 @@ export const fetchHistoryByWallet = async (
   }
 };
 
+const summaryCache = new Map<string, { data: HistorySummaryResponse; timestamp: number }>();
+const SUMMARY_CACHE_TTL = 60000;
+
 export const fetchHistorySummary = async (
   wallet: string,
   days: number = 30,
 ): Promise<HistorySummaryResponse> => {
   try {
+    const cacheKey = `${wallet}-${days}`;
+    const cached = summaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < SUMMARY_CACHE_TTL) {
+      return cached.data;
+    }
+
     const since = Date.now() - days * 24 * 60 * 60 * 1000;
+    
     const historyQuery = query(
       collection(db, HISTORY_COLLECTION),
       where('wallet', '==', wallet),
       where('timestamp', '>=', since),
       orderBy('timestamp', 'desc'),
-      limit(MAX_LIMIT),
+      limit(Math.min(50, MAX_LIMIT)),
     );
 
     const snapshot = await getDocs(historyQuery);
@@ -121,15 +131,17 @@ export const fetchHistorySummary = async (
       const existing = pointsMap.get(dayKey) ?? 0;
       pointsMap.set(dayKey, existing + (data.totals.valueUsdOut || 0));
 
-      data.chartIndicators.forEach((indicator) => {
-        sellIndicators.push({
-          timestamp: indicator.timestamp,
-          valueUsd: indicator.valueUsd,
-          token: indicator.symbol,
-          outputToken: indicator.outputToken, 
-          type: indicator.type,
+      if (sellIndicators.length < 100 && data.chartIndicators) {
+        data.chartIndicators.forEach((indicator) => {
+          sellIndicators.push({
+            timestamp: indicator.timestamp,
+            valueUsd: indicator.valueUsd,
+            token: indicator.symbol,
+            outputToken: indicator.outputToken, 
+            type: indicator.type,
+          });
         });
-      });
+      }
     });
 
     const points = Array.from(pointsMap.entries())
@@ -139,7 +151,16 @@ export const fetchHistorySummary = async (
       }))
       .sort((a, b) => a.timestamp - b.timestamp);
 
-    return { points, sellIndicators };
+    const result = { points, sellIndicators };
+    
+    summaryCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    
+    if (summaryCache.size > 20) {
+      const oldestKey = Array.from(summaryCache.keys())[0];
+      summaryCache.delete(oldestKey);
+    }
+
+    return result;
   } catch (error) {
     console.error('failed to fetch history summary:', error);
     throw error;

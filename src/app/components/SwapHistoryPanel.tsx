@@ -1,10 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, memo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   HistorySummaryResponse,
-  SwapBatchRecordWithId,
 } from '../types/history';
 import { SwapHistoryChart } from './SwapHistoryChart';
 import {
@@ -29,13 +28,12 @@ export function triggerSwapHistoryRefresh() {
   swapHistoryRefreshCallback?.();
 }
 
-export function SwapHistoryPanel() {
+// Optimized: Memoized component to prevent unnecessary re-renders
+export const SwapHistoryPanel = memo(function SwapHistoryPanel() {
   const { publicKey } = useWallet();
-  const [history, setHistory] = useState<SwapBatchRecordWithId[]>([]);
   const [summary, setSummary] = useState<HistorySummaryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const loadHistory = useCallback(async () => {
     if (!publicKey || !HISTORY_ENABLED) return;
@@ -45,21 +43,14 @@ export function SwapHistoryPanel() {
 
     try {
       const wallet = publicKey.toBase58();
-      const [historyRes, summaryRes] = await Promise.all([
-        fetch(`/api/history?wallet=${wallet}&limit=10`),
-        fetch(`/api/history/summary?wallet=${wallet}&range=30`),
-      ]);
+      // Optimized: Only fetch summary data, history detail view is commented out
+      const summaryRes = await fetch(`/api/history/summary?wallet=${wallet}&range=30`);
 
-      if (!historyRes.ok) {
-        throw new Error('history request failed');
-      }
       if (!summaryRes.ok) {
         throw new Error('summary request failed');
       }
 
-      const historyData = await historyRes.json();
       const summaryData = (await summaryRes.json()) as HistorySummaryResponse;
-      setHistory(historyData.data ?? []);
       setSummary(summaryData);
     } catch (err) {
       console.error('failed to load history:', err);
@@ -73,7 +64,6 @@ export function SwapHistoryPanel() {
     if (publicKey && HISTORY_ENABLED) {
       loadHistory();
     } else {
-      setHistory([]);
       setSummary(null);
     }
   }, [publicKey, loadHistory]);
@@ -164,61 +154,6 @@ export function SwapHistoryPanel() {
           </div>
         )}
       </div>
-
-      {/* <div className="space-y-3 max-h-72 overflow-y-auto -mx-2 px-2 sm:mx-0 sm:px-0">
-        {history.length === 0 && !loading && (
-          <div className="text-center text-tertiary text-sm py-8">
-            no swaps recorded yet
-          </div>
-        )}
-        {history.map((record) => (
-          <div
-            key={record.id}
-            className="bg-secondary border border-primary  p-4 space-y-2"
-          >
-            <div className="flex items-center justify-between text-sm text-secondary">
-              <span>
-                {new Date(record.timestamp).toLocaleString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </span>
-              <span
-                className={`text-xs px-2 py-1  ${
-                  record.status === 'success'
-                    ? 'bg-green-primary/20 text-green-primary'
-                    : 'text-orange-primary'
-                }`} style={{
-                  background: record.status === 'success' 
-                    ? 'rgba(0, 255, 136, 0.1)' 
-                    : 'rgba(255, 107, 53, 0.1)'
-                }}
-              >
-                {record.status}
-              </span>
-            </div>
-            <div className="text-xs text-tertiary">
-              {record.tokensIn.length} token
-              {record.tokensIn.length !== 1 ? 's' : ''} → {record.outputToken.symbol}
-            </div>
-            <div className="flex items-center justify-between text-sm text-primary">
-              <span>
-                ${record.totals.valueUsdIn.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
-              {typeof record.quoteImprovementPct === 'number' && (
-                <span className="text-xs text-orange-primary">
-                  +{record.quoteImprovementPct.toFixed(2)}% routing edge
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div> */}
     </div>
   );
-}
+});

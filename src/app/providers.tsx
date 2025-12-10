@@ -14,6 +14,10 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 
 export function Providers({ children }: { children: ReactNode }) {
   const endpoint = useMemo(() => {
+    const heliusKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
+    if (heliusKey) {
+      return `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+    }
     return process.env.NEXT_PUBLIC_RPC_ENDPOINT_1 || 
            process.env.NEXT_PUBLIC_RPC_ENDPOINT_2 ||
            'https://api.mainnet-beta.solana.com';

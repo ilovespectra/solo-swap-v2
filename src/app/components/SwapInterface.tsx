@@ -89,8 +89,6 @@ export function SwapInterface({
   const { connection } = useConnection();
   const { publicKey, signTransaction, sendTransaction, wallet } = useWallet();
 
-  const [isClient, setIsClient] = useState(false);
-  
   const [outputToken, setOutputToken] = useState(USDC_MINT);
   const [showTokenSelector, setShowTokenSelector] = useState(false);
   const tokenSelectorRef = useRef<HTMLDivElement>(null);
@@ -103,27 +101,32 @@ export function SwapInterface({
   const getActionVerb = useMemo(() => isLiquidation ? 'liquidate' : 'swap pro-rata', [isLiquidation]);
   const getProcessName = useMemo(() => isLiquidation ? 'liquidation' : 'swap', [isLiquidation]);
 
+  const fetchPopularTokens = useCallback(async () => {
+    const cached = sessionStorage.getItem('popular-tokens-cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 3600000) {
+          setPopularTokens(parsed.tokens);
+          return;
+        }
+      } catch {
+      }
+    }
 
-  useEffect(() => {
-    fetchPopularTokens();
-  }, []);
-
-  
-
-  const fetchPopularTokens = async () => {
     try {
       const response = await fetch('https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/src/tokens/solana.tokenlist.json');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
       const data = await response.json();
       const tokens = data.tokens;
       
       const popularSymbols = ['SOL', 'USDC', 'USDT', 'BONK', 'JUP', 'RAY', 'ORCA', 'SRM', 'MSOL', 'JITO'];
-      const topTokens = popularSymbols.map(symbol => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const token = tokens.find((t: any) => t.symbol === symbol);
-        if (token) {
+      const topTokens = popularSymbols
+        .map(symbol => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const token = tokens.find((t: any) => t.symbol === symbol);
+          if (!token) return null;
           return {
             mint: token.address,
             symbol: token.symbol,
@@ -134,11 +137,12 @@ export function SwapInterface({
             value: 0,
             price: 0
           };
-        }
-        return null;
-      }).filter(Boolean).slice(0, 10) as TokenBalance[];
+        })
+        .filter(Boolean)
+        .slice(0, 10) as TokenBalance[];
       
       setPopularTokens(topTokens);
+      sessionStorage.setItem('popular-tokens-cache', JSON.stringify({ tokens: topTokens, timestamp: Date.now() }));
     } catch (error) {
       console.error('Failed to fetch popular tokens:', error);
       setPopularTokens([
@@ -168,11 +172,11 @@ export function SwapInterface({
         }
       ]);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    setIsClient(true);
-  }, []);
+    fetchPopularTokens();
+  }, [fetchPopularTokens]);
 
   useEffect(() => {
     if (prevTotalSelectedValue.current !== totalSelectedValue && totalSelectedValue > 0) {

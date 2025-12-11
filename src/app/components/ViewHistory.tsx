@@ -10,7 +10,7 @@ import { encryptionService } from '../lib/encryption';
 import { Trash2, Calendar, DollarSign, Wallet, Coins, Download, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface PortfolioHistory {
-  id: string;
+  id?: string;
   timestamp: Date;
   totalValue: number;
   walletCount: number;
@@ -21,12 +21,14 @@ interface HistoricalPortfolioProps {
   onPortfolioSelect?: (portfolio: PortfolioHistory) => void;
   currentPortfolioValue?: number;
   mode?: 'single' | 'multisig';
+  portfolioHistory?: Array<Omit<PortfolioHistory, 'id'> & { id?: string }>;
 }
 
 export function HistoricalPortfolio({ 
   onPortfolioSelect, 
   currentPortfolioValue, 
-  mode = 'single'
+  mode = 'single',
+  portfolioHistory: providedPortfolioHistory
 }: HistoricalPortfolioProps) {
   const { publicKey } = useWallet();
   const [portfolioHistory, setPortfolioHistory] = useState<PortfolioHistory[]>([]);
@@ -36,10 +38,21 @@ export function HistoricalPortfolio({
   const [selectedPortfolio, setSelectedPortfolio] = useState<PortfolioHistory | null>(null);
 
   useEffect(() => {
-    if (publicKey && expanded) {
+    if (providedPortfolioHistory) {
+      const normalized = providedPortfolioHistory.map((record, index) => ({
+        ...record,
+        id: record.id || `local-${index}-${record.timestamp.getTime()}`
+      }));
+      setPortfolioHistory(normalized);
+      setLoading(false);
+    }
+  }, [providedPortfolioHistory]);
+
+  useEffect(() => {
+    if (publicKey && expanded && !providedPortfolioHistory) {
       loadPortfolioHistory();
     }
-  }, [publicKey, expanded, mode]);
+  }, [publicKey, expanded, mode, providedPortfolioHistory]);
 
   const getCollectionPath = () => {
     if (!publicKey) return '';
@@ -73,7 +86,6 @@ export function HistoricalPortfolio({
         const data = doc.data();
         
         if (!data.encryptedData) {
-          console.warn('No encrypted data found for record:', doc.id);
           continue;
         }
 
@@ -100,7 +112,6 @@ export function HistoricalPortfolio({
             );
 
             if (decryptedTotalValue === null || decryptedWalletCount === null || decryptedTokenCount === null) {
-              console.warn('failed to decrypt data for record:', doc.id);
               continue;
             }
 
@@ -122,7 +133,6 @@ export function HistoricalPortfolio({
             });
             successfulDecryptions++;
           } else {
-            console.warn('failed to decrypt data for record:', doc.id);
             decryptionErrors++;
           }
         } catch (decryptError) {
@@ -140,8 +150,8 @@ export function HistoricalPortfolio({
     }
   };
 
-  const deletePortfolioRecord = async (portfolioId: string) => {
-    if (!publicKey) return;
+  const deletePortfolioRecord = async (portfolioId?: string) => {
+    if (!publicKey || !portfolioId) return;
 
     try {
       setDeletingId(portfolioId);
@@ -328,7 +338,7 @@ export function HistoricalPortfolio({
                 
                 return (
                   <div
-                    key={portfolio.id}
+                    key={portfolio.id ?? `record-${index}`}
                     className={`p-4 sm:p-5 rounded-xl border transition-all duration-200 cursor-pointer group ${
                       isSelected
                         ? 'bg-gradient-to-r from-gray-500/20 to-gray-500/20 border-gray-500/50 shadow-lg shadow-gray-500/20'
@@ -391,7 +401,7 @@ export function HistoricalPortfolio({
                             e.stopPropagation();
                             deletePortfolioRecord(portfolio.id);
                           }}
-                          disabled={deletingId === portfolio.id}
+                          disabled={!portfolio.id || deletingId === portfolio.id}
                           className="text-red-400 hover:text-red-300 transition-all duration-200 p-2 hover:bg-red-500/20 rounded-lg disabled:opacity-50 mobile-optimized"
                         >
                           {deletingId === portfolio.id ? (

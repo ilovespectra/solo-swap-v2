@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { PublicKey } from '@solana/web3.js';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
@@ -9,20 +9,18 @@ import { useColumnState } from '../hooks/useColumnState';
 import { TokenTable } from './TokenTable';
 import { TokenService } from '../lib/api';
 import { 
-  Search, ExternalLink, Calculator, Copy, CheckCircle, AlertCircle, 
-  Wallet, Download, ArrowUpDown, ChevronUp, ChevronDown, HelpCircle,
-  Plus, Trash2, Upload, FileText, Clock, ChevronRight, X, Eye, EyeOff, GripVertical
+  Search, Calculator, Copy, CheckCircle, AlertCircle, 
+  Wallet, Download, HelpCircle, Plus, Trash2, Upload, FileText, Clock, ChevronRight, X, Eye, EyeOff, GripVertical
 } from 'lucide-react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, TouchSensor, DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, useSortable, horizontalListSortingStrategy, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { 
   collection, doc, setDoc, getDoc, getDocs, deleteDoc, 
-  query, orderBy, Timestamp 
+  query, orderBy, Timestamp, writeBatch 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import Papa from 'papaparse';
-import { PortfolioChart } from './HistoricalChart';
 import { encryptionService } from '../lib/encryption';
 import { HistoricalPortfolio } from './ViewHistory';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
@@ -35,8 +33,11 @@ export function Portal({ children }: PortalProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
-    return () => setMounted(false);
+    const timeoutId = setTimeout(() => setMounted(true), 0);
+    return () => {
+      clearTimeout(timeoutId);
+      setMounted(false);
+    };
   }, []);
 
   if (!mounted) return null;
@@ -73,11 +74,6 @@ interface SavedWallet {
   lastTotalValue?: number;
 }
 
-interface ExtendedTokenBalance extends TokenBalance {
-  sourceWallet: string;
-  sourceNickname: string;
-}
-
 interface PortfolioHistory {
   timestamp: Date;
   totalValue: number;
@@ -87,23 +83,6 @@ interface PortfolioHistory {
 
 type SortField = 'symbol' | 'balance' | 'value' | 'percentage';
 type SortDirection = 'asc' | 'desc';
-
-interface SortIconProps {
-  field: SortField;
-  sortField: SortField;
-  sortDirection: SortDirection;
-}
-
-const SortIcon = ({ field, sortField, sortDirection }: SortIconProps) => {
-  if (sortField !== field) {
-    return <ArrowUpDown className="h-3 w-3 text-gray-400" />;
-  }
-  
-  return sortDirection === 'asc' 
-    ? <ChevronUp className="h-3 w-3 text-gray-400" />
-    : <ChevronDown className="h-3 w-3 text-gray-400" />;
-};
-
 interface LoadingBarProps {
   totalItems: number;
   currentProcessed: number;
@@ -222,18 +201,21 @@ export function LoadingBar({
   return (
     <div className={`w-full ${className}`}>
       <div className="flex justify-between items-center mb-2">
-        <span className="text-sm text-gray-300 font-medium">
+        <span className="text-sm text-secondary font-medium">
           {totalItems} {itemType} detected
         </span>
-        <span className="text-sm text-gray-400">
+        <span className="text-sm text-tertiary">
           {isComplete ? 'complete!' : timeRemaining > 0 ? `${formatTimeRemaining(timeRemaining)} remaining` : 'starting...'}
         </span>
       </div>
 
-      <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+      <div className="w-full  h-3 overflow-hidden" style={{ background: 'var(--bg-tertiary)' }}>
         <div 
-          className="h-full bg-gradient-to-r from-gray-500 to-gray-300 rounded-full transition-all duration-300 ease-out relative"
-          style={{ width: `${progress}%` }}
+          className="h-full  transition-all duration-300 ease-out relative"
+          style={{ 
+            width: `${progress}%`,
+            background: 'linear-gradient(90deg, var(--orange-primary), var(--orange-light))'
+          }}
         >
           {!isComplete && (
             <div 
@@ -247,7 +229,7 @@ export function LoadingBar({
       </div>
 
       <div className="flex justify-between items-center mt-2">
-        <span className="text-xs text-gray-400">
+        <span className="text-xs text-tertiary">
           {Math.round(progress)}% complete
         </span>
       </div>
@@ -258,8 +240,8 @@ export function LoadingBar({
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="w-2 h-2 bg-gray-300 rounded-full animate-pulse"
-                style={{ animationDelay: `${i * 0.2}s` }}
+                className="w-2 h-2  animate-pulse"
+                style={{ background: 'var(--orange-primary)' }}
               />
             ))}
           </div>
@@ -268,7 +250,7 @@ export function LoadingBar({
 
       {isComplete && (
         <div className="flex items-center justify-center mt-3 space-x-2">
-          <div className="w-2 h-2 bg-green-400 rounded-full animate-ping" />
+          <div className="w-2 h-2  animate-ping" style={{ background: 'var(--green-primary)' }} />
         </div>
       )}
 
@@ -287,20 +269,24 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
   defaultOpen?: boolean;
   className?: string;
+  style?: React.CSSProperties;
 }
 
-function CollapsibleSection({ title, children, defaultOpen = true, className = '' }: CollapsibleSectionProps) {
+function CollapsibleSection({ title, children, defaultOpen = true, className = '', style }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={`bg-gray-800/50 rounded-xl backdrop-blur-sm border border-gray-700 ${className}`}>
+    <div className={`card backdrop-blur-sm ${className}`} style={style}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-6 text-left hover:bg-gray-700/30 transition-colors rounded-xl"
+        className="w-full flex items-center justify-between p-6 text-left transition-colors "
+        style={{ 
+          background: isOpen ? 'var(--bg-tertiary)' : 'transparent'
+        }}
       >
-        <h3 className="text-lg font-semibold">{title}</h3>
+        <h3 className="text-lg font-semibold text-orange-primary">{title}</h3>
         <ChevronRight 
-          className={`h-5 w-5 text-gray-400 transition-transform duration-200 ${
+          className={`h-5 w-5 text-secondary transition-transform duration-300 ${
             isOpen ? 'rotate-90' : ''
           }`}
         />
@@ -326,8 +312,8 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
   const [results, setResults] = useState<AnalysisResult[]>([]);
   const [savedWallets, setSavedWallets] = useState<SavedWallet[]>([]);
   const [copied, setCopied] = useState(false);
-  const [sortField, setSortField] = useState<SortField>('value');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [sortField] = useState<SortField>('value');
+  const [sortDirection] = useState<SortDirection>('desc');
   const [liquidationAmount, setLiquidationAmount] = useState<string>('');
   const [liquidationType, setLiquidationType] = useState<'dollar' | 'percentage'>('percentage');
   const [selectedTokens, setSelectedTokens] = useState<Set<string>>(new Set());
@@ -346,6 +332,12 @@ export function MultisigAnalyzer({ onBack }: MultisigAnalyzerProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [targetToken, setTargetToken] = useState<any>(null);
   const [initialLoad, setInitialLoad] = useState(true);
+  const [updatedTokens, setUpdatedTokens] = useState<Set<string>>(new Set());
+  const [updatedWallets, setUpdatedWallets] = useState<Set<string>>(new Set());
+  const subscriptionsSetup = useRef(false);
+  const lastFirestoreWrite = useRef<number>(0);
+  const lastCleanupRun = useRef<number>(0);
+  const HISTORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
   const [showColumnPanel, setShowColumnPanel] = useState(false);
 
@@ -380,22 +372,30 @@ function SortableColumnItem({ column, onToggleVisibility }: SortableColumnItemPr
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg border border-gray-600/50"
+      style={{
+        ...style,
+        background: 'var(--bg-tertiary)',
+        borderColor: 'var(--border-primary)'
+      }}
+      className="flex items-center justify-between p-3  border"
     >
       <div className="flex items-center space-x-3 flex-1">
         <button
           {...attributes}
           {...listeners}
-          className="p-1 text-gray-400 hover:text-gray-300 cursor-grab active:cursor-grabbing"
+          className="p-1 text-tertiary cursor-grab active:cursor-grabbing transition-colors"
+          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-tertiary)'}
         >
           <GripVertical className="h-4 w-4" />
         </button>
-        <span className="text-sm font-medium text-gray-200">{column.label}</span>
+        <span className="text-sm font-medium text-secondary">{column.label}</span>
       </div>
       <button
         onClick={() => onToggleVisibility(column.id)}
-        className="p-2 text-gray-400 hover:text-gray-300 transition-colors"
+        className="p-2 text-tertiary transition-colors"
+        onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+        onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-tertiary)'}
       >
         {column.visible ? (
           <Eye className="h-4 w-4" />
@@ -512,26 +512,30 @@ function ColumnCustomizationPanel({
       >
         <div
           ref={panelRef}
-          className="absolute bg-gray-800 rounded-xl p-6 w-full max-w-md max-h-[80vh] overflow-y-auto shadow-2xl border border-gray-600"
+          className="absolute  p-6 w-full max-w-md max-h-[80vh] overflow-y-auto shadow-2xl border"
           style={{
             top: `${position.top}px`,
             left: `${position.left}px`,
-            transform: 'none'
+            transform: 'none',
+            background: 'var(--bg-secondary)',
+            borderColor: 'var(--border-primary)'
           }}
         >
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Column Settings</h3>
+            <h3 className="text-lg font-semibold">column settings</h3>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-white p-2 rounded-lg transition-colors"
+              className="text-tertiary p-2  transition-colors"
+              onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+              onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-tertiary)'}
             >
               <X className="h-5 w-5" />
             </button>
           </div>
           
           <div className="space-y-3 mb-6">
-            <p className="text-sm text-gray-400">
-              Drag to reorder columns, toggle visibility with the eye icon
+            <p className="text-sm text-tertiary">
+              drag to reorder columns, toggle visibility with the eye icon
             </p>
           </div>
 
@@ -556,18 +560,21 @@ function ColumnCustomizationPanel({
             </SortableContext>
           </DndContext>
 
-          <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+          <div className="flex justify-between items-center mt-6 pt-4 border-t" style={{ borderColor: 'var(--border-primary)' }}>
             <button
               onClick={onReset}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-sm font-medium"
+              className="px-4 py-2  transition-colors text-sm font-medium"
+              style={{ background: 'var(--bg-tertiary)' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-secondary)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-tertiary)'}
             >
-              Reset to Default
+              reset to default
             </button>
             <button
               onClick={onClose}
-              className="px-4 py-2 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-500 hover:to-gray-600 rounded-lg transition-colors text-sm font-medium"
+              className="px-4 py-2 btn-primary  transition-colors text-sm font-medium"
             >
-              Done
+              done
             </button>
           </div>
         </div>
@@ -576,7 +583,7 @@ function ColumnCustomizationPanel({
   );
 }
 
-  const searchTokens = async (query: string) => {
+  const searchTokens = useCallback(async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
       return;
@@ -590,15 +597,18 @@ function ColumnCustomizationPanel({
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const tokens = await response.json();
+      const data = await response.json();
+      
+
+      const tokens = Array.isArray(data) ? data : (data.tokens || []);
       
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const formattedResults = tokens.slice(0, 20).map((token: any) => ({
-        mint: token.id,
-        symbol: token.symbol,
-        name: token.name,
-        logoURI: token.icon,
-        decimals: token.decimals,
+        mint: token.address || token.id || token.mint,
+        symbol: token.symbol || 'UNKNOWN',
+        name: token.name || 'Unknown Token',
+        logoURI: token.logoURI || token.icon || '',
+        decimals: token.decimals || 9,
         uiAmount: 0,
         value: 0,
         price: 0
@@ -606,21 +616,26 @@ function ColumnCustomizationPanel({
       
       setSearchResults(formattedResults);
       
-    } catch (error) {
-      console.error('Token search failed:', error);
+    } catch {
       setSearchResults([]);
     } finally {
       setIsSearching(false);
     }
-  };
+  }, []);
+
 
   useEffect(() => {
-  if (initialLoad && savedWallets.length > 0 && publicKey && !analyzing) {
-    console.log('Auto-analyzing wallets on initial load...');
-    analyzeAllWallets();
-    setInitialLoad(false);
-  }
-}, [initialLoad, savedWallets.length, publicKey, analyzing]);
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      searchTokens(searchQuery);
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery, searchTokens]);
 
   const [loadingProgress, setLoadingProgress] = useState({
     totalItems: 0,
@@ -634,30 +649,25 @@ function ColumnCustomizationPanel({
 
   const SNS_DOMAINS = ['.sol', '.bonk', '.poor', '.ser', '.abc', '.backpack', '.crown', '.gogo', '.hodl', '.meme', '.monke', '.oon', '.ponke', '.pump', '.shark', '.snipe', '.turtle', '.wallet', '.whale', '.worker', '.00', '.inv', '.ux', '.ray', '.luv'];
 
-  const [sectionsVisible, setSectionsVisible] = useState({
-    help: true,
-    lastPortfolio: true,
-    manageWallets: true,
-    portfolioChart: true,
-    portfolioAnalysis: true,
-    liquidation: true,
-    shoppingList: true,
-    tokenTable: true,
-    portfolioSummary: true
-  });
-
-  const toggleSection = (section: keyof typeof sectionsVisible) => {
-    setSectionsVisible(prev => ({
-      ...prev,
-      [section]: !prev[section]
-    }));
-  };
-
   useEffect(() => {
     if (!publicKey) return;
 
     const loadPortfolioHistory = async () => {
       try {
+        const cacheKey = `portfolio-history-cache-${publicKey.toString()}`;
+        const cached = typeof window !== 'undefined' ? sessionStorage.getItem(cacheKey) : null;
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as { ts: number; data: PortfolioHistory[] };
+            if (Date.now() - parsed.ts < HISTORY_CACHE_TTL_MS && Array.isArray(parsed.data)) {
+              setPortfolioHistory(parsed.data.map(r => ({ ...r, timestamp: new Date(r.timestamp) })));
+              setChartDataLoaded(true);
+              return;
+            }
+          } catch {
+          }
+        }
+
         const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
         const historyQuery = query(
           collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'),
@@ -665,15 +675,17 @@ function ColumnCustomizationPanel({
         );
         const querySnapshot = await getDocs(historyQuery);
         
+        const nowMs = Date.now();
+        const dayMs = 24 * 60 * 60 * 1000;
+        const retentionMs = 90 * dayMs;
+        const retentionCutoff = nowMs - retentionMs;
+
         const history: PortfolioHistory[] = [];
-        let decryptionErrors = 0;
-        let successfulDecryptions = 0;
 
         for (const doc of querySnapshot.docs) {
           const data = doc.data();
           
           if (!data.encryptedData) {
-            console.warn('No encrypted data found for record:', doc.id);
             continue;
           }
 
@@ -684,20 +696,20 @@ function ColumnCustomizationPanel({
             );
 
             if (decryptedData) {
-              history.push({
-                timestamp: decryptedData.timestamp,
-                totalValue: decryptedData.totalValue,
-                walletCount: decryptedData.walletCount,
-                tokenCount: decryptedData.tokenCount
-              });
-              successfulDecryptions++;
-            } else {
-              console.warn('failed to decrypt data for record:', doc.id);
-              decryptionErrors++;
+              const timestamp = decryptedData.timestamp instanceof Date
+                ? decryptedData.timestamp
+                : new Date(decryptedData.timestamp);
+
+              if (!isNaN(timestamp.getTime()) && timestamp.getTime() >= retentionCutoff) {
+                history.push({
+                  timestamp,
+                  totalValue: decryptedData.totalValue,
+                  walletCount: decryptedData.walletCount,
+                  tokenCount: decryptedData.tokenCount
+                });
+              }
             }
-          } catch (decryptError) {
-            console.error('decryption error for record:', doc.id, decryptError);
-            decryptionErrors++;
+          } catch {
           }
         }
 
@@ -706,12 +718,11 @@ function ColumnCustomizationPanel({
         setPortfolioHistory(history);
         setChartDataLoaded(true);
 
-        if (decryptionErrors > 0) {
-          console.warn(`${decryptionErrors} records could not be decrypted and were skipped`);
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: history }));
         }
 
-      } catch (err) {
-        console.error('failed to load encrypted multi-wallet portfolio history:', err);
+      } catch {
         setChartDataLoaded(true);
       }
     };
@@ -750,8 +761,7 @@ function ColumnCustomizationPanel({
         const totalLastValue = wallets.reduce((sum, wallet) => sum + (wallet.lastTotalValue || 0), 0);
         setLastLoadedPortfolioValue(totalLastValue);
         
-      } catch (err) {
-        console.error('failed to load saved wallets:', err);
+      } catch {
       } finally {
         setLoadingLastValue(false); 
       }
@@ -784,7 +794,6 @@ function ColumnCustomizationPanel({
       return { id: walletRef.id, ...walletData };
       
     } catch (error) {
-      console.error('firestore save failed:', error);
       
       if (error instanceof Error) {
         const firestoreError = error as { code?: string };
@@ -800,9 +809,148 @@ function ColumnCustomizationPanel({
     }
   };
 
-  const savePortfolioHistory = async (totalValue: number, walletCount: number, tokenCount: number) => {
+  const bucketizeRecords = useCallback(
+    (records: PortfolioHistory[], bucketMs: number, startTime: number, endTime: number): PortfolioHistory[] => {
+      const buckets = new Map<number, { totalValue: number; walletCount: number; tokenCount: number; count: number }>();
+
+      records.forEach((record) => {
+        const ts = record.timestamp.getTime();
+        if (ts < startTime || ts >= endTime) return;
+        const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+        const existing = buckets.get(bucketStart) || { totalValue: 0, walletCount: 0, tokenCount: 0, count: 0 };
+        buckets.set(bucketStart, {
+          totalValue: existing.totalValue + record.totalValue,
+          walletCount: existing.walletCount + record.walletCount,
+          tokenCount: existing.tokenCount + record.tokenCount,
+          count: existing.count + 1,
+        });
+      });
+
+      return Array.from(buckets.entries()).map(([bucketStart, agg]) => ({
+        timestamp: new Date(bucketStart),
+        totalValue: agg.totalValue / agg.count,
+        walletCount: Math.round(agg.walletCount / agg.count),
+        tokenCount: Math.round(agg.tokenCount / agg.count),
+      }));
+    },
+    [],
+  );
+
+  const cleanupPortfolioHistory = useCallback(async () => {
+    if (!publicKey) return;
+
+    const nowMs = Date.now();
+    const throttleMs = 900000;
+    if (nowMs - lastCleanupRun.current < throttleMs) {
+      return;
+    }
+
+    const anonymizedKey = encryptionService.anonymizePublicKey(publicKey.toString());
+    const recordsRef = collection(db, 'solo-users', anonymizedKey, 'portfolioHistory');
+    const snapshot = await getDocs(query(recordsRef, orderBy('timestamp', 'asc')));
+
+    if (snapshot.empty) {
+      lastCleanupRun.current = nowMs;
+      return;
+    }
+
+    const decryptedRecords: PortfolioHistory[] = [];
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+
+      if (!data.encryptedData) return;
+
+      try {
+        const decryptedData = encryptionService.decryptPortfolioHistory(
+          data.encryptedData,
+          publicKey.toString()
+        );
+
+        if (!decryptedData) return;
+
+        decryptedRecords.push({
+          timestamp: decryptedData.timestamp,
+          totalValue: decryptedData.totalValue,
+          walletCount: decryptedData.walletCount,
+          tokenCount: decryptedData.tokenCount,
+        });
+      } catch (err) {
+        console.error('cleanup decrypt error:', err);
+      }
+    });
+
+    if (decryptedRecords.length === 0) {
+      lastCleanupRun.current = nowMs;
+      return;
+    }
+
+    const hourMs = 60 * 60 * 1000;
+    const dayMs = 24 * hourMs;
+    const weekMs = 7 * dayMs;
+    const monthMs = 30 * dayMs;
+    const retentionMs = 90 * dayMs;
+
+    const retentionCutoff = nowMs - retentionMs;
+
+    const recentCutoff = nowMs - hourMs;
+    const weekCutoff = nowMs - weekMs;
+    const monthCutoff = nowMs - monthMs;
+
+    const filteredRecords = decryptedRecords.filter((r) => r.timestamp.getTime() >= retentionCutoff);
+
+    const recentRecords = filteredRecords.filter((r) => r.timestamp.getTime() >= recentCutoff);
+    const minuteReduced = bucketizeRecords(filteredRecords, 60_000, weekCutoff, recentCutoff);
+    const hourlyReduced = bucketizeRecords(filteredRecords, 60 * 60 * 1000, monthCutoff, weekCutoff);
+    const multiDayReduced = bucketizeRecords(filteredRecords, 4 * dayMs, 0, monthCutoff);
+
+    const finalRecords = [...multiDayReduced, ...hourlyReduced, ...minuteReduced, ...recentRecords]
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+
+    finalRecords.forEach((record) => {
+      const encryptedData = encryptionService.encryptPortfolioHistory({
+        totalValue: record.totalValue,
+        walletCount: record.walletCount,
+        tokenCount: record.tokenCount,
+        timestamp: record.timestamp,
+      }, publicKey.toString());
+
+      const docRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'));
+      const bucketSizeMs = record.timestamp.getTime() < monthCutoff
+        ? 4 * dayMs
+        : record.timestamp.getTime() < weekCutoff
+          ? 60 * 60 * 1000
+          : record.timestamp.getTime() < recentCutoff
+            ? 60_000
+            : 30_000;
+
+      batch.set(docRef, {
+        timestamp: Timestamp.fromDate(record.timestamp),
+        userId: publicKey.toString(),
+        encryptedData,
+        randomField1: encryptionService.generateRandomEncrypted(publicKey.toString()),
+        randomField2: encryptionService.generateRandomEncrypted(publicKey.toString()),
+        metadata: {
+          hasData: true,
+          recordType: 'portfolio',
+          version: '1.1',
+          bucketSizeMs,
+          walletCountRange: record.walletCount > 10 ? '10+' : '1-10',
+          tokenCountRange: record.tokenCount > 50 ? '50+' : record.tokenCount > 10 ? '10-50' : '1-10'
+        }
+      });
+    });
+
+    await batch.commit();
+    setPortfolioHistory(finalRecords);
+    lastCleanupRun.current = Date.now();
+  }, [publicKey, bucketizeRecords]);
+
+  const savePortfolioHistory = useCallback(async (totalValue: number, walletCount: number, tokenCount: number) => {
     if (!publicKey) {
-      console.error('no public key - cannot save portfolio history');
       return;
     }
 
@@ -824,8 +972,26 @@ function ColumnCustomizationPanel({
         publicKey.toString()
       );
 
+      const nowMs = Date.now();
+      const hourMs = 60 * 60 * 1000;
+      const dayMs = 24 * hourMs;
+      const weekMs = 7 * dayMs;
+      const monthMs = 30 * dayMs;
+
+      const bucketSizeMs = nowMs >= (nowMs - hourMs)
+        ? 30_000
+        : nowMs >= (nowMs - weekMs)
+          ? 60_000
+          : nowMs >= (nowMs - monthMs)
+            ? 60 * 60 * 1000
+            : 4 * dayMs;
+
+      const bucketStart = Math.floor(nowMs / bucketSizeMs) * bucketSizeMs;
+      const bucketDate = new Date(bucketStart);
+      const docId = `bucket-${bucketSizeMs}-${bucketStart}`;
+
       const historyData = {
-        timestamp: Timestamp.fromDate(new Date()),
+        timestamp: Timestamp.fromDate(bucketDate),
         userId: publicKey.toString(),
         encryptedData: encryptedPortfolioData,
         randomField1: encryptionService.generateRandomEncrypted(publicKey.toString()),
@@ -833,19 +999,20 @@ function ColumnCustomizationPanel({
         metadata: {
           hasData: true,
           recordType: 'portfolio',
-          version: '1.0',
+          version: '1.1',
+          bucketSizeMs,
           walletCountRange: walletCount > 10 ? '10+' : '1-10',
           tokenCountRange: tokenCount > 50 ? '50+' : tokenCount > 10 ? '10-50' : '1-10'
         }
       };
 
-      const historyRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory')); 
+      const historyRef = doc(collection(db, 'solo-users', anonymizedKey, 'portfolioHistory'), docId); 
       
       await setDoc(historyRef, historyData);
       
       setPortfolioHistory(prev => {
         const newHistory = [...prev, {
-          timestamp: portfolioData.timestamp,
+          timestamp: bucketDate,
           totalValue: portfolioData.totalValue,
           walletCount: portfolioData.walletCount,
           tokenCount: portfolioData.tokenCount
@@ -857,17 +1024,24 @@ function ColumnCustomizationPanel({
         return trimmedHistory;
       });
 
-    } catch (error) {
-      console.error('failed to save encrypted portfolio history to firestore:', error);
+      await cleanupPortfolioHistory();
+
+    } catch {
     }
-  };
+  }, [publicKey, cleanupPortfolioHistory]);
 
   useEffect(() => {
     const totalLastValue = savedWallets.reduce((sum, wallet) => sum + (wallet.lastTotalValue || 0), 0);
-    setLastLoadedPortfolioValue(totalLastValue);
-  }, [savedWallets]);
+    
+    if (results.length > 0) {
+      const currentTotal = results.reduce((sum, result) => sum + result.totalValue, 0);
+      setLastLoadedPortfolioValue(currentTotal);
+    } else if (totalLastValue > 0) {
+      setLastLoadedPortfolioValue(totalLastValue);
+    }
+  }, [savedWallets, results]);
 
-  const updateWalletLastAnalyzed = async (walletAddress: string, totalValue: number = 0) => {
+  const updateWalletLastAnalyzed = useCallback(async (walletAddress: string, totalValue: number = 0) => {
     if (!publicKey) return;
 
     try {
@@ -885,10 +1059,9 @@ function ColumnCustomizationPanel({
           ? { ...w, lastAnalyzed: new Date(), lastTotalValue: totalValue }
           : w
       ));
-    } catch (error) {
-      console.error('failed to update last analyzed:', error);
+    } catch {
     }
-  };
+  }, [publicKey, savedWallets]);
 
   const deleteWalletFromFirestore = async (walletId: string) => {
     if (!publicKey) return;
@@ -910,8 +1083,7 @@ function ColumnCustomizationPanel({
       const owner = registry.registry.owner.toBase58();
       
       return owner;
-    } catch (snsError) {
-      console.warn('spl name service resolution failed:', snsError);
+    } catch {
     }
 
     try {
@@ -934,8 +1106,7 @@ function ColumnCustomizationPanel({
       if (data.result && data.result.owner) {
         return data.result.owner;
       }
-    } catch (heliusError) {
-      console.warn('helius enhanced resolution failed:', heliusError);
+    } catch {
     }
 
     try {
@@ -947,14 +1118,12 @@ function ColumnCustomizationPanel({
           return data.address;
         }
       }
-    } catch (apiError) {
-      console.warn('bonfida api fallback failed:', apiError);
+    } catch {
     }
 
     throw new Error(`could not resolve domain: ${cleanDomain}. the domain may not exist or all resolution methods are unavailable.`);
 
   } catch (err) {
-    console.error('domain resolution failed:', err);
     
     if (err instanceof Error) {
       if (err.message.includes('not exist') || err.message.includes('not found')) {
@@ -1055,7 +1224,6 @@ function ColumnCustomizationPanel({
     setWalletNickname('');
     
   } catch (err) {
-    console.error('error in addWallet:', err);
     const errorMsg = err instanceof Error ? err.message : 'failed to add wallet';
     
     if (errorMsg.includes('already saved') || errorMsg.includes('already exists')) {
@@ -1082,10 +1250,11 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
     
     try {
       tokenBalances = await tokenService.getTokenBalances(walletAddress);
-    } catch (balanceError) {
-      console.error('failed to fetch token balances:', balanceError);
+    } catch {
       throw new Error(`unable to fetch token balances for this wallet. the wallet may be empty or there may be network issues.`);
     }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     const potentiallyValuableTokens = tokenBalances.filter(token => {
       const isSol = token.symbol.toLowerCase() === 'sol' || token.name.toLowerCase().includes('solana');
@@ -1107,8 +1276,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
           
           return (isSol && hasBalance) || (!isSol && hasValue && hasBalance);
         });
-      } catch (priceError) {
-        console.error('price fetching failed:', priceError);
+      } catch {
         valuableTokens = potentiallyValuableTokens.map(token => ({
           ...token,
           value: 0,
@@ -1128,7 +1296,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       analyzedAt: new Date()
     };
 
-
     await updateWalletLastAnalyzed(walletAddress, totalValue);
 
     if (valuableTokens.length === 0) {
@@ -1141,7 +1308,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'failed to analyze wallet';
-    console.error('analysis error:', err);
     
     if (savedWallets.length === 1) {
       if (errorMsg.includes('failed to fetch') || errorMsg.includes('network')) {
@@ -1161,7 +1327,113 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
   }
 };
 
-  const analyzeAllWallets = async () => {
+
+  const tokenMints = useMemo(() => {
+    const allTokenMints = new Set<string>();
+    results.forEach(result => {
+      result.tokens.forEach(token => allTokenMints.add(token.mint));
+    });
+    return Array.from(allTokenMints).sort();
+  }, [results]);
+
+  const tokenMintsKey = tokenMints.join(',');
+
+  useEffect(() => {
+  if (!publicKey || tokenMints.length === 0) {
+    subscriptionsSetup.current = false;
+    return;
+  }
+
+  const unsubscribeCallbacks: (() => void)[] = [];
+
+  tokenMints.forEach(mint => {
+    const unsubscribe = tokenService.subscribeToPriceUpdates(mint, (priceUpdate) => {
+      setResults(prev => {
+        const updated = prev.map(result => ({
+          ...result,
+          tokens: result.tokens.map(token =>
+            token.mint === priceUpdate.mint
+              ? {
+                  ...token,
+                  price: priceUpdate.price || 0,
+                  value: (priceUpdate.price || 0) * token.uiAmount,
+                  changePercent24h: priceUpdate.changePercent24h,
+                  lastUpdated: priceUpdate.lastUpdated
+                }
+              : token
+          ),
+          totalValue: result.tokens.reduce((sum, token) => {
+            if (token.mint === priceUpdate.mint) {
+              return sum + ((priceUpdate.price || 0) * token.uiAmount);
+            }
+            return sum + (token.value || 0);
+          }, 0)
+        }));
+
+        const newTotalPortfolioValue = updated.reduce((sum, result) => sum + result.totalValue, 0);
+        
+        const now = Date.now();
+        if (now - lastFirestoreWrite.current > 180000 && newTotalPortfolioValue > 0) {
+          lastFirestoreWrite.current = now;
+          savePortfolioHistory(newTotalPortfolioValue, updated.length, updated.reduce((sum, r) => sum + r.tokens.length, 0)).catch(err =>
+            console.error('Failed to save portfolio history:', err)
+          );
+        }
+
+        return updated;
+      });
+
+      setUpdatedTokens(prev => {
+        const newSet = new Set(prev);
+        newSet.add(priceUpdate.mint);
+        return newSet;
+      });
+
+      setResults(prevResults => {
+        setUpdatedWallets(prevWallets => {
+          const newSet = new Set(prevWallets);
+          prevResults.forEach((result: AnalysisResult) => {
+            if (result.tokens.some((t: TokenBalance) => t.mint === priceUpdate.mint)) {
+              newSet.add(result.walletAddress);
+            }
+          });
+          return newSet;
+        });
+        return prevResults;
+      });
+
+      setTimeout(() => {
+        setUpdatedTokens(prev => {
+          const next = new Set(prev);
+          next.delete(priceUpdate.mint);
+          return next;
+        });
+        setResults(prevResults => {
+          setUpdatedWallets(prevWallets => {
+            const next = new Set(prevWallets);
+            prevResults.forEach((result: AnalysisResult) => {
+              if (result.tokens.some((t: TokenBalance) => t.mint === priceUpdate.mint)) {
+                next.delete(result.walletAddress);
+              }
+            });
+            return next;
+          });
+          return prevResults;
+        });
+      }, 800);
+    });
+    
+    unsubscribeCallbacks.push(unsubscribe);
+  });
+
+  return () => {
+    unsubscribeCallbacks.forEach(unsub => unsub());
+    subscriptionsSetup.current = false;
+  };
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [publicKey, savePortfolioHistory, tokenMintsKey, tokenService, tokenMints.length]);
+
+  const analyzeAllWallets = useCallback(async () => {
   if (savedWallets.length === 0) {
     setError('no saved wallets to analyze');
     return;
@@ -1179,6 +1451,7 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
   try {
     let failedAnalyses = 0;
+    const failedWallets: string[] = [];
 
     if (!loadingProgress.isActive) {
       setResults([]);
@@ -1186,8 +1459,8 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
     
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    const newResults: AnalysisResult[] = [];
-
+    const walletBalances: Array<{ wallet: SavedWallet; tokens: TokenBalance[] }> = [];
+    
     for (let i = 0; i < savedWallets.length; i++) {
       const wallet = savedWallets[i];
       
@@ -1197,22 +1470,105 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
       }));
       
       try {
-        const result = await analyzeWallet(wallet.address, wallet.nickname || undefined, wallet.isDomain);
-        if (result) {
-          newResults.push(result);
-        }
-      } catch (err) {
-        console.error(`failed to analyze wallet ${wallet.address}:`, err);
-        failedAnalyses++;
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const tokenBalances = await tokenService.getTokenBalances(wallet.address);
+        const tokensWithBalance = tokenBalances.filter(token => {
+          const isSol = token.symbol.toLowerCase() === 'sol';
+          return isSol ? token.uiAmount > 0 : token.uiAmount > 0;
+        });
         
-        if (err instanceof Error && (err.message.includes('rate limit') || err.message.includes('429'))) {
-          await new Promise(resolve => setTimeout(resolve, 10000));
+        walletBalances.push({ wallet, tokens: tokensWithBalance });
+      } catch {
+        failedAnalyses++;
+        failedWallets.push(wallet.address);
+      }
+    }
+
+    if (failedWallets.length > 0) {
+      const failedPreview = failedWallets
+        .slice(0, 3)
+        .map(addr => `${addr.slice(0, 8)}...${addr.slice(-6)}`)
+        .join(', ');
+
+      setError(`analysis incomplete: failed to load balances for ${failedWallets.length} wallet${failedWallets.length > 1 ? 's' : ''} (${failedPreview}${failedWallets.length > 3 ? ', ...' : ''}). results not updated to avoid partial totals.`);
+      setLoadingProgress(prev => ({
+        ...prev,
+        currentProcessed: savedWallets.length,
+        isActive: false
+      }));
+      setAnalyzing(false);
+      return;
+    }
+
+    const allMints = new Set<string>();
+    const tokensByMint = new Map<string, TokenBalance>();
+    
+    walletBalances.forEach(({ tokens }) => {
+      tokens.forEach(token => {
+        allMints.add(token.mint);
+        if (!tokensByMint.has(token.mint)) {
+          tokensByMint.set(token.mint, token);
         }
+      });
+    });
+
+    const uniqueTokens = Array.from(tokensByMint.values());
+    let tokensWithPrices: TokenBalance[] = [];
+
+    if (uniqueTokens.length > 0) {
+      try {
+        tokensWithPrices = await tokenService.getTokenPrices(uniqueTokens);
+      } catch (error) {
+        console.error('Error fetching prices:', error);
+        setError('network error fetching prices. please check your internet connection and try again.');
+        setLoadingProgress(prev => ({
+          ...prev,
+          currentProcessed: savedWallets.length,
+          isActive: false
+        }));
+        setAnalyzing(false);
+        return;
       }
-      
-      if (i < savedWallets.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      }
+    }
+
+    const priceMap = new Map<string, { price: number; value?: number; changePercent24h?: number | null }>();
+    tokensWithPrices.forEach(token => {
+      priceMap.set(token.mint, { 
+        price: token.price || 0, 
+        changePercent24h: token.changePercent24h ?? null
+      });
+    });
+
+    const newResults: AnalysisResult[] = [];
+    
+    for (const { wallet, tokens } of walletBalances) {
+      const tokensWithValues = tokens.map(token => {
+        const priceData = priceMap.get(token.mint);
+        const price = priceData?.price || 0;
+        return {
+          ...token,
+          price,
+          value: price * token.uiAmount,
+          changePercent24h: priceData?.changePercent24h ?? null
+        };
+      }).filter(token => {
+        const isSol = token.symbol.toLowerCase() === 'sol';
+        return isSol ? token.uiAmount > 0 : (token.value || 0) > 0.01 && token.uiAmount > 0;
+      });
+
+      const totalValue = tokensWithValues.reduce((sum, token) => sum + (token.value || 0), 0);
+
+      const result: AnalysisResult = {
+        tokens: tokensWithValues,
+        totalValue,
+        walletAddress: wallet.address,
+        nickname: wallet.nickname || undefined,
+        isDomain: wallet.isDomain,
+        analyzedAt: new Date()
+      };
+
+      await updateWalletLastAnalyzed(wallet.address, totalValue);
+      newResults.push(result);
     }
 
     setResults(newResults);
@@ -1226,6 +1582,8 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
     const totalPortfolioValue = newResults.reduce((sum, result) => sum + result.totalValue, 0);
     const totalTokens = newResults.reduce((sum, result) => sum + result.tokens.length, 0);
+
+    setLastLoadedPortfolioValue(totalPortfolioValue);
 
     if (totalPortfolioValue > 0 && newResults.length > 0) {
       await savePortfolioHistory(totalPortfolioValue, newResults.length, totalTokens);
@@ -1253,15 +1611,22 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
     }
     
   } catch (err) {
-    console.error('error analyzing all wallets:', err);
     setError(`failed to analyze some wallets: ${err instanceof Error ? err.message : 'unknown error'}`);
+    setLoadingProgress(prev => ({ ...prev, isActive: false }));
   } finally {
     setAnalyzing(false);
     setTimeout(() => {
       setLoadingProgress(prev => ({ ...prev, isActive: false }));
-    }, 2000);
+    }, 1000);
   }
-};
+}, [loadingProgress.isActive, savePortfolioHistory, savedWallets, tokenService, updateWalletLastAnalyzed]);
+
+  useEffect(() => {
+    if (initialLoad && savedWallets.length > 0 && publicKey && !analyzing) {
+      analyzeAllWallets();
+      setInitialLoad(false);
+    }
+  }, [analyzeAllWallets, analyzing, initialLoad, publicKey, savedWallets.length]);
 
   const downloadCsvTemplate = () => {
     const template = `address,nickname
@@ -1282,18 +1647,41 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
   };
 
   const allTokens = useMemo(() => {
-    return results.flatMap(result => 
-      result.tokens.map(token => ({
-        ...token,
-        sourceWallet: result.walletAddress,
-        sourceNickname: result.nickname || (result.isDomain ? result.walletAddress : `${result.walletAddress.slice(0, 4)}...${result.walletAddress.slice(-4)}`)
-      }))
-    );
+
+    const tokenMap = new Map<string, TokenBalance & { sourceWallet: string; sourceNickname: string }>();
+    
+    results.forEach(result => {
+      result.tokens.forEach(token => {
+        const existing = tokenMap.get(token.mint);
+        const sourceNickname = result.nickname || (result.isDomain ? result.walletAddress : `${result.walletAddress.slice(0, 4)}...${result.walletAddress.slice(-4)}`);
+        
+        if (existing) {
+
+          tokenMap.set(token.mint, {
+            ...existing,
+            uiAmount: existing.uiAmount + token.uiAmount,
+            value: existing.value + token.value,
+
+            sourceNickname: existing.sourceWallet === result.walletAddress 
+              ? existing.sourceNickname 
+              : `${existing.sourceNickname}, ${sourceNickname}`
+          });
+        } else {
+
+          tokenMap.set(token.mint, {
+            ...token,
+            sourceWallet: result.walletAddress,
+            sourceNickname
+          });
+        }
+      });
+    });
+    
+    return Array.from(tokenMap.values());
   }, [results]);
 
   useEffect(() => {
     if (selectAllRef.current && allTokens.length > 0) {
-      const allSelected = selectedTokens.size === allTokens.length;
       const someSelected = selectedTokens.size > 0 && selectedTokens.size < allTokens.length;
       selectAllRef.current.indeterminate = someSelected;
     }
@@ -1313,7 +1701,6 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
 
   const {
     columns,
-    updateColumnWidth,
     toggleColumnVisibility,
     reorderColumns,
     resetColumns,
@@ -1484,26 +1871,13 @@ const analyzeWallet = async (walletAddress: string, nickname?: string | null, is
   return header + timestamp + summary + liquidationInfo + columnHeaders + tokenList + '\n\n' + footer;
 };
 
-useEffect(() => {
-  const delayDebounceFn = setTimeout(() => {
-    if (searchQuery.trim()) {
-      searchTokens(searchQuery);
-    } else {
-      setSearchResults([]);
-    }
-  }, 300);
-
-  return () => clearTimeout(delayDebounceFn);
-}, [searchQuery]);
-
   const copyShoppingList = async () => {
     const shoppingList = generateShoppingList();
     try {
       await navigator.clipboard.writeText(shoppingList);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('failed to copy:', err);
+    } catch {
       setError('failed to copy shopping list to clipboard');
     }
   };
@@ -1567,7 +1941,6 @@ useEffect(() => {
           }
 
           if (!wallet.address?.trim()) {
-            console.warn(`skipping empty address at row ${index + 1}`);
             failedImports++;
             errors.push(`row ${index + 1}: empty address`);
             continue;
@@ -1580,8 +1953,7 @@ useEffect(() => {
             try {
               address = await resolveDomain(address);
               isDomainAddress = true;
-            } catch (resolveError) {
-              console.warn(`failed to resolve domain ${wallet.address}:`, resolveError);
+            } catch {
               failedImports++;
               errors.push(`row ${index + 1}: failed to resolve domain ${wallet.address}`);
               continue;
@@ -1589,14 +1961,12 @@ useEffect(() => {
           }
 
           if (!validateWalletAddress(address)) {
-            console.warn(`invalid address in csv at row ${index + 1}: ${wallet.address}`);
             failedImports++;
             errors.push(`row ${index + 1}: invalid address ${wallet.address}`);
             continue;
           }
 
           if (processedAddresses.has(address)) {
-            console.warn(`skipping duplicate address at row ${index + 1}: ${address}`);
             duplicateAddresses.add(address);
             failedImports++;
             errors.push(`row ${index + 1}: duplicate address ${wallet.address}`);
@@ -1607,7 +1977,6 @@ useEffect(() => {
           const walletDoc = await getDoc(walletDocRef);
           
           if (walletDoc.exists()) {
-            console.warn(`skipping duplicate address at row ${index + 1}: ${address} (already exists in your wallets)`);
             duplicateAddresses.add(address);
             failedImports++;
             errors.push(`row ${index + 1}: address already exists in your wallets ${wallet.address}`);
@@ -1628,7 +1997,6 @@ useEffect(() => {
           }
           
         } catch (err) {
-          console.error(`failed to import wallet at row ${index + 1}:`, wallet.address, err);
           failedImports++;
           errors.push(`row ${index + 1}: ${err instanceof Error ? err.message : 'unknown error'}`);
           
@@ -1679,8 +2047,7 @@ useEffect(() => {
           });
           
           setSavedWallets(updatedWallets);
-        } catch (err) {
-          console.error('failed to reload wallets after csv import:', err);
+        } catch {
         }
       } else if (failedImports > 0) {
         let errorMessage = `no wallets were successfully imported. all ${failedImports} failed.`;
@@ -1702,7 +2069,6 @@ useEffect(() => {
       }
 
     } catch (err) {
-      console.error('csv upload error:', err);
       const errorMsg = err instanceof Error ? err.message : 'failed to process csv file';
       setCsvUploadError(`${errorMsg}`);
       
@@ -1736,12 +2102,12 @@ useEffect(() => {
   };
 
   return (
-  <div className="-mr-12 -ml-4 min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 text-white">
+  <div className="w-full overflow-x-hidden px-0 sm:px-4 md:px-6" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
     <div className="relative z-10">
-      <div className="container mx-auto px-4 py-6">
+      <div className="w-full py-6">
         {/* Enhanced Header */}
-        <div className="flex items-center justify-between mb-8 p-4 bg-gray-800/30 rounded-xl border border-gray-700/50">
-          <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-gray-300 to-gray-100 bg-clip-text text-transparent">
+        <div className="flex items-center justify-between mb-8 p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}>
+          <h1 className="text-2xl sm:text-3xl font-bold" style={{ color: 'var(--orange-primary)' }}>
             solo: shop
           </h1>
           <div className="w-20"></div>
@@ -1751,46 +2117,48 @@ useEffect(() => {
         <CollapsibleSection 
           title="instructions"
           defaultOpen={true}
-          className="bg-gray-800/30 rounded-xl border border-gray-700/30 mb-6"
+          className="mb-6"
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
         >
           <div className="flex items-start justify-between">
-            <p className="text-sm text-gray-300 flex-1 leading-relaxed">
+            <p className="text-sm flex-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
               enter multiple addresses to generate a combined pro-rata swapping list.
             </p>
             <button
               onClick={() => setShowHelp(!showHelp)}
-              className="ml-4 p-2 bg-gray-700/50 hover:bg-gray-600/50 rounded-lg transition-colors"
+              className="ml-4 p-2 transition-colors"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             >
-              <HelpCircle className="h-5 w-5 text-gray-400 hover:text-gray-300" />
+              <HelpCircle className="h-5 w-5" style={{ color: 'var(--text-secondary)' }} />
             </button>
           </div>
           
           {showHelp && (
-            <div className="mt-4 p-4 bg-gray-700/20 border border-gray-600/30 rounded-lg">
-              <h4 className="font-semibold text-sm mb-3 text-gray-400">how to use:</h4>
-              <ul className="text-sm text-gray-300 space-y-2">
+            <div className="mt-4 p-4" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}>
+              <h4 className="font-semibold text-sm mb-3" style={{ color: 'var(--text-primary)' }}>how to use:</h4>
+              <ul className="text-sm space-y-2" style={{ color: 'var(--text-secondary)' }}>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>add individual wallets or upload a csv with multiple addresses</span>
                 </li>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>wallets are saved to your account for future use</span>
                 </li>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>analyze all wallets at once to see combined portfolio</span>
                 </li>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>select tokens from any wallet for pro-rata calculations</span>
                 </li>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>generate shopping lists that maintain weights across all selected tokens</span>
                 </li>
                 <li className="flex items-center space-x-2">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 "></div>
                   <span>each token shows which wallet it comes from</span>
                 </li>
               </ul>
@@ -1798,31 +2166,32 @@ useEffect(() => {
           )}
         </CollapsibleSection>
 
-        {/* Last Total Section */}
+        {/* last total Section */}
         {savedWallets.length > 0 && lastLoadedPortfolioValue > 0 && (
           <CollapsibleSection 
             title="last total"
             defaultOpen={true}
-            className="bg-gray-800/30 rounded-xl -mx-4 border border-gray-700/30 mb-6"
+            className="mb-6"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-gray-600/20 rounded-lg border border-gray-500/30">
-                  <Clock className="h-5 w-5 text-gray-400" />
+                <div className="p-2" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}>
+                  <Clock className="h-5 w-5" style={{ color: 'var(--orange-primary)' }} />
                 </div>
                 <div>
-                  <h3 className="font-medium text-sm text-gray-200">last total</h3>
-                  <p className="text-xs text-gray-400">
+                  <h3 className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>last total</h3>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {savedWallets.length} wallet{savedWallets.length > 1 ? 's' : ''}
                   </p>
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-lg sm:text-xl font-bold text-gray-400">
+                <div className="text-lg sm:text-xl font-bold" style={{ color: 'var(--green-primary)' }}>
                   ${lastLoadedPortfolioValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
                 {results.length > 0 && (
-                  <div className="text-xs text-gray-300 mt-1">
+                  <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
                     current: ${totalPortfolioValue.toLocaleString()}
                   </div>
                 )}
@@ -1835,7 +2204,8 @@ useEffect(() => {
         <CollapsibleSection 
           title="manage wallets"
           defaultOpen={true}
-          className="bg-gray-800/30 -mx-4 rounded-xl border border-gray-700/30 mb-6"
+          className="mb-6"
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="md:col-span-2">
@@ -1843,14 +2213,19 @@ useEffect(() => {
                 wallet address or domain
               </label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
                 <input
                   type="text"
-                  placeholder="enter wallet (e.g., 7aEY...f9Xq or example.sol)"
+                  placeholder="enter wallet address or domain"
                   value={walletInput}
                   onChange={(e) => setWalletInput(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && addWallet()}
-                  className="w-full pl-10 pr-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm placeholder-gray-400"
+                  className="w-full pl-10 pr-4 py-3 text-sm"
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-primary)',
+                    color: 'var(--text-primary)',
+                  }}
                 />
               </div>
               <div className="flex flex-wrap gap-2 mt-3">
@@ -1859,7 +2234,7 @@ useEffect(() => {
                   <button
                     key={domain}
                     onClick={() => setWalletInput(`example${domain}`)}
-                    className="text-xs text-gray-400 hover:text-gray-300 transition-colors px-2 py-1 bg-gray-500/10 hover:bg-gray-500/20 rounded"
+                    className="text-xs text-gray-400 hover:text-gray-300 transition-colors px-2 py-1 bg-gray-500/10 hover:bg-gray-500/20 "
                   >
                     {domain}
                   </button>
@@ -1875,7 +2250,12 @@ useEffect(() => {
                 placeholder="my treasury"
                 value={walletNickname}
                 onChange={(e) => setWalletNickname(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm"
+                className="w-full px-4 py-3 text-sm"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-primary)',
+                  color: 'var(--text-primary)',
+                }}
               />
             </div>
           </div>
@@ -1886,11 +2266,17 @@ useEffect(() => {
             <button
               onClick={addWallet}
               disabled={addingWallet || analyzing || !walletInput.trim()}
-              className="flex items-center justify-center sm:justify-start space-x-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 rounded-lg transition-colors text-sm font-medium text-white w-full sm:w-auto"
+              className="flex items-center justify-center sm:justify-start space-x-2 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 transition-colors text-sm font-medium w-full sm:w-auto"
+              style={{
+                background: 'linear-gradient(135deg, var(--orange-primary), var(--orange-secondary))',
+                color: '#ffffff',
+              }}
             >
               {addingWallet ? (
                 <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <div className="h-4 w-4 text-white" style={{ color: 'white' }}>
+                    <div className="circular-dot-spinner"></div>
+                  </div>
                   <span>adding wallet...</span>
                 </>
               ) : (
@@ -1905,11 +2291,17 @@ useEffect(() => {
             <button
               onClick={analyzeAllWallets}
               disabled={analyzing || savedWallets.length === 0 || loadingProgress.isActive}
-              className="flex items-center justify-center sm:justify-start space-x-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 rounded-lg transition-colors text-sm font-medium text-white w-full sm:w-auto"
+              className="flex items-center justify-center sm:justify-start space-x-2 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-3 transition-colors text-sm font-medium w-full sm:w-auto"
+              style={{
+                background: 'linear-gradient(135deg, var(--orange-primary), var(--orange-secondary))',
+                color: '#ffffff',
+              }}
             >
               {loadingProgress.isActive ? (
                 <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <div className="h-4 w-4 text-white" style={{ color: 'white' }}>
+                    <div className="circular-dot-spinner"></div>
+                  </div>
                   <span>analyzing... ({loadingProgress.currentProcessed}/{savedWallets.length})</span>
                 </>
               ) : (
@@ -1921,7 +2313,12 @@ useEffect(() => {
             </button>
 
             {/* Upload CSV */}
-            <label className="flex items-center justify-center sm:justify-start space-x-2 bg-gray-500 hover:bg-gray-400 px-5 py-3 rounded-lg transition-colors text-sm font-medium text-gray-800 cursor-pointer w-full sm:w-auto">
+            <label className="flex items-center justify-center sm:justify-start space-x-2 px-5 py-3 transition-colors text-sm font-medium cursor-pointer w-full sm:w-auto"
+              style={{
+                background: 'var(--bg-tertiary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-primary)',
+              }}>
               <Upload className="h-4 w-4" />
               <span>upload csv</span>
               <input
@@ -1936,7 +2333,12 @@ useEffect(() => {
             {/* Download Template */}
             <button
               onClick={downloadCsvTemplate}
-              className="flex items-center justify-center sm:justify-start space-x-2 bg-gray-500 hover:bg-gray-400 px-5 py-3 rounded-lg transition-colors text-sm font-medium text-gray-800 cursor-pointer w-full sm:w-auto"
+              className="flex items-center justify-center sm:justify-start space-x-2 px-5 py-3 transition-colors text-sm font-medium cursor-pointer w-full sm:w-auto"
+              style={{
+                background: 'var(--bg-tertiary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-primary)',
+              }}
             >
               <FileText className="h-4 w-4" />
               <span>template</span>
@@ -1945,36 +2347,45 @@ useEffect(() => {
 
           {/* Loading Progress */}
           {loadingProgress.isActive && (
-            <div className="mb-6 bg-gray-800/30 rounded-xl border border-gray-700/30 p-6">
+            <div className="mb-6 p-6" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}>
               <h3 className="text-lg font-semibold mb-4 flex items-center space-x-3">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-300"></div>
+                <div className="h-6 w-6" style={{ color: 'var(--orange-primary)' }}>
+                  <div className="circular-dot-spinner"></div>
+                </div>
                 <span>analyzing wallets...</span>
               </h3>
               <LoadingBar
                 totalItems={loadingProgress.totalItems}
                 currentProcessed={loadingProgress.currentProcessed}
                 itemType={loadingProgress.itemType}
-                durationPerItem={3000}
+                durationPerItem={500}
                 className="mt-4"
               />
-              <div className="mt-4 text-sm text-gray-400 text-center">
+              <div className="mt-4 text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
                 processing wallet {Math.min(loadingProgress.currentProcessed + 1, loadingProgress.totalItems)} of {loadingProgress.totalItems}
-                {loadingProgress.currentProcessed > 0 && (
-                  <span className="ml-2 text-gray-300 font-medium">
+                {/* {loadingProgress.currentProcessed > 0 && (
+                  <span className="ml-2 font-medium" style={{ color: 'var(--text-primary)' }}>
                     ({Math.round((loadingProgress.currentProcessed / loadingProgress.totalItems) * 100)}%)
                   </span>
-                )}
+                )} */}
               </div>
             </div>
           )}
 
           {/* Error/Success Messages */}
           {(error || csvUploadError) && (
-            <div className={`p-4 rounded-lg border text-sm ${
+            <div className={`p-4  border text-sm ${
               error.includes('✅') || csvUploadError.includes('successfully imported') || csvUploadError.includes('added') 
-                ? 'bg-green-500/20 border-green-500/50 text-green-200'
-                : 'bg-red-500/20 border-red-500/50 text-red-200'
-            }`}>
+                ? 'border-success text-green-primary'
+                : 'text-orange-dark'
+            }`} style={{
+              background: error.includes('✅') || csvUploadError.includes('successfully imported') || csvUploadError.includes('added')
+                ? 'rgba(0, 255, 136, 0.1)'
+                : 'rgba(217, 79, 31, 0.1)',
+              borderColor: error.includes('✅') || csvUploadError.includes('successfully imported') || csvUploadError.includes('added')
+                ? 'var(--border-success)'
+                : 'var(--border-error)'
+            }}>
               <div className="flex items-center space-x-2">
                 {error.includes('✅') || csvUploadError.includes('successfully imported') || csvUploadError.includes('added') ? (
                   <CheckCircle className="h-4 w-4" />
@@ -1989,37 +2400,46 @@ useEffect(() => {
           {/* Saved Wallets List */}
           {savedWallets.length > 0 && (
             <div className="mt-6">
-              <h4 className="text-sm font-medium mb-4 text-gray-200 flex items-center space-x-2">
-                <Wallet className="h-4 w-4 text-gray-400" />
+              <h4 className="text-sm font-medium mb-4 flex items-center space-x-2" style={{ color: 'var(--text-primary)' }}>
+                <Wallet className="h-4 w-4" style={{ color: 'var(--orange-primary)' }} />
                 <span>saved wallets ({savedWallets.length})</span>
               </h4>
               <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
                 {savedWallets.map((wallet) => (
                   <div
                     key={wallet.id}
-                    className="flex items-center justify-between p-4 bg-gray-700/30 rounded-lg border border-gray-600/50 hover:bg-gray-700/50 transition-colors group"
+                    className="flex items-center justify-between p-4 transition-colors group"
+                    style={{
+                      background: 'var(--bg-tertiary)',
+                      border: '1px solid var(--border-primary)',
+                    }}
                   >
                     <div className="flex items-center space-x-3 flex-1 min-w-0">
-                      <div className="p-2 bg-gray-600/20 rounded border border-gray-500/30">
-                        <Wallet className="h-4 w-4 text-gray-400" />
+                      <div className="p-2" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}>
+                        <Wallet className="h-4 w-4" style={{ color: 'var(--orange-primary)' }} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm text-white truncate">
+                        <div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>
                           {wallet.nickname || (wallet.isDomain ? 
                             (wallet.address || 'Unknown domain') : 
                             `${(wallet.address || '').slice(0, 8)}...${(wallet.address || '').slice(-6)}`
                           )}
                         </div>
                         {wallet.nickname && wallet.isDomain && (
-                          <div className="text-xs text-gray-400 truncate">{wallet.address}</div>
+                          <div className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{wallet.address}</div>
                         )}
                         {wallet.nickname && !wallet.isDomain && (
-                          <div className="text-xs text-gray-400 truncate">{`${(wallet.address || '').slice(0, 8)}...${(wallet.address || '').slice(-6)}`}</div>
+                          <div className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{`${(wallet.address || '').slice(0, 8)}...${(wallet.address || '').slice(-6)}`}</div>
                         )}
                         {wallet.lastAnalyzed && (
-                          <div className="text-xs text-gray-500 flex items-center space-x-1 mt-1">
+                          <div className="text-xs flex items-center space-x-1 mt-1" style={{ color: 'var(--text-secondary)' }}>
                             <Clock className="h-3 w-3" />
                             <span>last analyzed: {formatTimestamp(wallet.lastAnalyzed)}</span>
+                          </div>
+                        )}
+                        {wallet.lastTotalValue !== undefined && wallet.lastTotalValue > 0 && (
+                          <div className="text-xs font-semibold mt-1" style={{ color: 'var(--green-primary)' }}>
+                            ${wallet.lastTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         )}
                       </div>
@@ -2028,13 +2448,26 @@ useEffect(() => {
                       <button
                         onClick={() => analyzeWallet(wallet.address, wallet.nickname, wallet.isDomain)}
                         disabled={analyzing}
-                        className="p-2 bg-gray-500/20 hover:bg-gray-400/30 border border-gray-500/30 rounded transition-colors text-gray-300 hover:text-gray-100 disabled:opacity-50"
+                        className="p-2 bg-gray-500/20 hover:bg-gray-400/30 border border-gray-500/30  transition-colors text-gray-300 hover:text-gray-100 disabled:opacity-50"
                       >
                         <Calculator className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => deleteWalletFromFirestore(wallet.id)}
-                        className="p-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded transition-colors text-red-400 hover:text-red-300"
+                        className="p-2 border  transition-colors mobile-optimized"
+                        style={{
+                          background: 'rgba(217, 79, 31, 0.1)',
+                          borderColor: 'var(--border-error)',
+                          color: 'var(--orange-dark)'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(217, 79, 31, 0.2)';
+                          e.currentTarget.style.color = 'var(--orange-primary)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(217, 79, 31, 0.1)';
+                          e.currentTarget.style.color = 'var(--orange-dark)';
+                        }}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -2048,7 +2481,7 @@ useEffect(() => {
 
         {/* Results Section */}
         {results.length > 0 && (
-          <div className="space-y-6 -mx-4">
+          <div className="space-y-6">
             {/* Analysis Section */}
             <CollapsibleSection 
               title="analysis"
@@ -2062,11 +2495,11 @@ useEffect(() => {
                     total value: <span className="text-green-400 font-semibold">
                       ${totalPortfolioValue.toLocaleString()}
                     </span>
-                    {results[0]?.analyzedAt && (
+                    {/* {results[0]?.analyzedAt && (
                       <span className="text-gray-400 ml-2">
                         • updated: {formatTimestamp(results[0].analyzedAt)}
                       </span>
-                    )}
+                    )} */}
                   </div>
                 </div>
               </div>
@@ -2076,23 +2509,25 @@ useEffect(() => {
                 {results
                   .sort((a, b) => b.totalValue - a.totalValue)
                   .map((result) => (
-                    <div key={result.walletAddress} className="bg-gray-700/30 rounded-lg p-4 border border-gray-600/50 hover:border-gray-500/50 transition-colors">
+                    <div key={result.walletAddress} className="p-4 transition-colors" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}>
                       <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-medium text-sm text-white truncate">
+                          <h3 className="font-medium text-sm truncate" style={{ color: 'var(--text-primary)' }}>
                             {result.nickname || (result.isDomain ? result.walletAddress : `${result.walletAddress.slice(0, 8)}...${result.walletAddress.slice(-6)}`)}
                           </h3>
-                          <p className="text-xs text-gray-400 mt-1">
+                          <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
                             {result.tokens.length} tokens
                           </p>
                           {result.analyzedAt && (
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
                               analyzed: {formatTimestamp(result.analyzedAt)}
                             </p>
                           )}
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <div className="text-lg font-bold text-green-400">
+                          <div className={`text-lg font-bold text-green-400 transition-all ${
+                            updatedWallets.has(result.walletAddress) ? 'price-updated' : ''
+                          }`}>
                             ${result.totalValue.toLocaleString()}
                           </div>
                           <div className="text-xs text-gray-400 mt-1">
@@ -2105,10 +2540,10 @@ useEffect(() => {
               </div>
 
               {allTokens.length > 0 && (
-                <div className="mb-6 flex items-center justify-between p-4 bg-gray-700/30 rounded-lg border border-gray-600/50">
+                <div className="mb-6 flex items-center justify-between p-4" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}>
                   <div className="flex items-center space-x-4">
                     {selectedTokens.size > 0 && (
-                      <span className="text-sm text-gray-400 font-medium">
+                      <span className="text-sm font-medium" style={{ color: 'var(--orange-primary)' }}>
                         {selectedTokens.size} tokens selected (${selectedTokensValue.toLocaleString()})
                       </span>
                     )}
@@ -2120,14 +2555,14 @@ useEffect(() => {
                 <CollapsibleSection 
                   title="liquidation amount"
                   defaultOpen={true}
-                  className="mb-6 -mx-4 bg-gray-700/20 rounded-lg border border-gray-600/30"
+                  className="mb-6 bg-gray-700/20 border border-gray-600/30"
                 >
                   <div className="flex flex-col sm:flex-row gap-4">
                     <div className="flex-1">
                       <div className="flex space-x-2 mb-3">
                         <button
                           onClick={() => setLiquidationType('percentage')}
-                          className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                          className={`px-4 py-2  text-sm font-medium transition-colors ${
                             liquidationType === 'percentage' 
                               ? 'bg-gray-600 text-white' 
                               : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
@@ -2137,7 +2572,7 @@ useEffect(() => {
                         </button>
                         <button
                           onClick={() => setLiquidationType('dollar')}
-                          className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                          className={`px-4 py-2  text-sm font-medium transition-colors ${
                             liquidationType === 'dollar' 
                               ? 'bg-gray-600 text-white' 
                               : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
@@ -2152,7 +2587,7 @@ useEffect(() => {
                           placeholder={liquidationType === 'percentage' ? 'enter percentage...' : 'enter dollar amount...'}
                           value={liquidationAmount}
                           onChange={(e) => setLiquidationAmount(e.target.value)}
-                          className="w-full pl-4 pr-12 py-3 bg-gray-600 border border-gray-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm"
+                          className="w-full pl-4 pr-12 py-3 bg-gray-600 border border-gray-500  focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm"
                         />
                         <span className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 text-sm">
                           {liquidationType === 'percentage' ? '%' : '$'}
@@ -2176,7 +2611,7 @@ useEffect(() => {
                 <CollapsibleSection 
                   title="swap destination"
                   defaultOpen={true}
-                  className="mb-6 -mx-6 bg-gray-700/20 rounded-lg border border-gray-600/30"
+                  className="mb-6 bg-gray-700/20 border border-gray-600/30"
                 >
                   <div className="space-y-4">
                     <div>
@@ -2190,18 +2625,20 @@ useEffect(() => {
                           placeholder="search symbol, name (e.g., USDC, SOL, etc.)"
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
-                          className="w-full pl-10 pr-4 py-3 bg-gray-600 border border-gray-500 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm"
+                          className="w-full pl-10 pr-4 py-3 bg-gray-600 border border-gray-500  focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm"
                         />
                         {isSearching && (
                           <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-500"></div>
+                            <div className="h-4 w-4" style={{ color: 'var(--orange-primary)' }}>
+                              <div className="circular-dot-spinner"></div>
+                            </div>
                           </div>
                         )}
                       </div>
                       
                       {/* Search Results Dropdown */}
                       {searchResults.length > 0 && (
-                        <div className="mt-2 max-h-60 overflow-y-auto bg-gray-700 border border-gray-600 rounded-lg shadow-lg">
+                        <div className="mt-2 max-h-60 overflow-y-auto shadow-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}>
                           {searchResults.map((token) => (
                             <button
                               key={token.mint}
@@ -2210,17 +2647,18 @@ useEffect(() => {
                                 setSearchResults([]);
                                 setSearchQuery(token.symbol);
                               }}
-                              className="w-full flex items-center space-x-3 p-3 hover:bg-gray-600 transition-colors text-left"
+                              className="w-full flex items-center space-x-3 p-3 transition-colors text-left"
+                              style={{ background: 'var(--bg-secondary)' }}
                             >
                               {token.logoURI ? (
                                 // eslint-disable-next-line @next/next/no-img-element
                                 <img
                                   src={token.logoURI}
                                   alt={token.symbol}
-                                  className="w-6 h-6 rounded-full"
+                                  className="w-6 h-6 "
                                 />
                               ) : (
-                                <div className="w-6 h-6 bg-gray-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                                <div className="w-6 h-6 flex items-center justify-center text-xs font-bold" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
                                   {token.symbol.slice(0, 3)}
                                 </div>
                               )}
@@ -2241,13 +2679,18 @@ useEffect(() => {
                       <CollapsibleSection 
                         title="shopping list actions"
                         defaultOpen={true}
-                        className="mb-6 mt-6 bg-gray-700/20 rounded-lg border border-gray-600/30"
+                        className="mb-6 mt-6"
+                        style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
                       >
                         <div className="flex flex-wrap gap-3">
                           <button
                             onClick={copyShoppingList}
                             disabled={!selectedTokens.size}
-                            className="flex items-center space-x-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                            className="flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 transition-colors text-sm font-medium"
+                            style={{
+                              background: 'linear-gradient(135deg, var(--orange-primary), var(--orange-secondary))',
+                              color: '#ffffff',
+                            }}
                           >
                             {copied ? <CheckCircle className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                             <span>{copied ? 'copied!' : 'copy shopping list'}</span>
@@ -2255,7 +2698,11 @@ useEffect(() => {
                           <button
                             onClick={downloadShoppingList}
                             disabled={!selectedTokens.size}
-                            className="flex items-center space-x-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 rounded-lg transition-colors text-sm font-medium"
+                            className="flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 transition-colors text-sm font-medium"
+                            style={{
+                              background: 'linear-gradient(135deg, var(--orange-primary), var(--orange-secondary))',
+                              color: '#ffffff',
+                            }}
                           >
                             <Download className="h-4 w-4" />
                             <span>download txt</span>
@@ -2264,7 +2711,7 @@ useEffect(() => {
                         
                         {/* Preview of what will be included */}
                         {selectedTokens.size > 0 && (
-                          <div className="mt-4 p-4 bg-gray-600/30 rounded-lg border border-gray-500/30">
+                          <div className="mt-4 p-4 bg-gray-600/30  border border-gray-500/30">
                             <h4 className="text-sm font-medium text-gray-200 mb-2">shopping list preview:</h4>
                             <div className="text-xs text-gray-400 space-y-1">
                               <div>• {selectedTokens.size} selected tokens from {results.length} wallets</div>
@@ -2273,7 +2720,7 @@ useEffect(() => {
                                 <div>• swapping to: {targetToken.symbol} ({targetToken.name})</div>
                               )}
                               {hasLiquidation && (
-                                <div>• Liquidating: ${liquidationValue.toLocaleString()} ({((liquidationValue / selectedTokensValue) * 100).toFixed(1)}% of selected)</div>
+                                <div>• liquidating: ${liquidationValue.toLocaleString()} ({((liquidationValue / selectedTokensValue) * 100).toFixed(1)}% of selected)</div>
                               )}
                             </div>
                           </div>
@@ -2282,23 +2729,23 @@ useEffect(() => {
                     )}
 
                     {targetToken && (
-                      <div className="flex items-center justify-between p-3 bg-gray-600/20 border border-gray-500/30 rounded-lg">
+                      <div className="flex items-center justify-between p-3" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)' }}>
                         <div className="flex items-center space-x-3">
                           {targetToken.logoURI ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={targetToken.logoURI}
                               alt={targetToken.symbol}
-                              className="w-8 h-8 rounded-full"
+                              className="w-8 h-8 "
                             />
                           ) : (
-                            <div className="w-8 h-8 bg-gray-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                            <div className="w-8 h-8 bg-gray-500  flex items-center justify-center text-white text-xs font-bold">
                               {targetToken.symbol.slice(0, 3)}
                             </div>
                           )}
                           <div>
-                            <div className="font-semibold text-white">{targetToken.symbol}</div>
-                            <div className="text-xs text-gray-300">{targetToken.name}</div>
+                            <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{targetToken.symbol}</div>
+                            <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{targetToken.name}</div>
                           </div>
                         </div>
                         <button
@@ -2306,9 +2753,9 @@ useEffect(() => {
                             setTargetToken(null);
                             setSearchQuery('');
                           }}
-                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                          className="p-1 hover:bg-orange-primary/20  transition-all duration-300"
                         >
-                          <Trash2 className="h-4 w-4 text-red-400" />
+                          <Trash2 className="h-4 w-4 text-orange-dark" />
                         </button>
                       </div>
                     )}
@@ -2319,7 +2766,7 @@ useEffect(() => {
               <CollapsibleSection 
                 title={`tokens • ${allTokens.length} total`}
                 defaultOpen={true}
-                className="bg-gray-800/30 -mx-8 rounded-xl border border-gray-700/30 overflow-hidden"
+                className="bg-gray-800/30 border border-gray-700/30 overflow-hidden"
               >
                 <TokenTable
                   tokens={sortedTokens.map(token => ({
@@ -2327,7 +2774,7 @@ useEffect(() => {
                     selected: selectedTokens.has(token.mint)
                   }))}
                   loading={analyzing}
-                  onTokenSelect={(mint, selected) => handleTokenSelect(mint)}
+                  onTokenSelect={(mint) => handleTokenSelect(mint)}
                   onSelectAll={handleSelectAll}
                   selectedTokens={sortedTokens.filter(token => selectedTokens.has(token.mint))}
                   totalSelectedValue={selectedTokensValue}
@@ -2336,6 +2783,7 @@ useEffect(() => {
                   totalToProcess={loadingProgress.totalItems}
                   portfolioHistory={portfolioHistory}
                   excludeTokenMint={targetToken?.mint}
+                  updatedTokens={updatedTokens}
                 />
               </CollapsibleSection>
 
@@ -2344,16 +2792,17 @@ useEffect(() => {
                 <CollapsibleSection 
                   title="portfolio summary"
                   defaultOpen={true}
-                  className="bg-gray-800/30 mt-6 rounded-xl border border-gray-700/30"
+                  className="mt-6"
+                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)' }}
                 >
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                     <div>
-                      <div className="text-gray-400 text-xs font-medium mb-1">total portfolio</div>
-                      <div className="text-green-400 font-bold text-lg">${totalPortfolioValue.toLocaleString()}</div>
+                      <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>total portfolio</div>
+                      <div className="font-bold text-lg" style={{ color: 'var(--green-primary)' }}>${totalPortfolioValue.toLocaleString()}</div>
                     </div>
                     <div>
-                      <div className="text-gray-400 text-xs font-medium mb-1">selected tokens</div>
-                      <div className="text-gray-400 font-bold text-lg">
+                      <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>selected tokens</div>
+                      <div className="font-bold text-lg" style={{ color: 'var(--text-primary)' }}>
                         {selectedTokens.size}/{allTokens.length} (${selectedTokensValue.toLocaleString()})
                       </div>
                     </div>
@@ -2364,20 +2813,20 @@ useEffect(() => {
                   </div>
                   
                   {hasLiquidation && (
-                    <div className="mt-4 pt-4 border-t border-gray-500/30">
+                    <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--border-primary)' }}>
                       <div className="flex flex-wrap gap-4 text-sm">
                         <div>
-                          <div className="text-gray-400 text-xs font-medium mb-1">liquidating</div>
-                          <div className="text-green-400 font-semibold">${liquidationValue.toLocaleString()}</div>
+                          <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>liquidating</div>
+                          <div className="font-semibold" style={{ color: 'var(--green-primary)' }}>${liquidationValue.toLocaleString()}</div>
                         </div>
                         <div>
-                          <div className="text-gray-400 text-xs font-medium mb-1">of selected</div>
-                          <div className="text-gray-400 font-semibold">
+                          <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>of selected</div>
+                          <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>
                             {((liquidationValue / selectedTokensValue) * 100).toFixed(1)}%
                           </div>
                         </div>
                         <div>
-                          <div className="text-gray-400 text-xs font-medium mb-1">remaining</div>
+                          <div className="text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>remaining</div>
                           <div className="text-gray-400 font-semibold">${remainingPortfolioValue.toLocaleString()}</div>
                         </div>
                       </div>
@@ -2387,17 +2836,30 @@ useEffect(() => {
               )}
             </CollapsibleSection>
 
+            {/* Historical Chart - shown when results exist */}
             <HistoricalPortfolio 
               mode="multisig"
               currentPortfolioValue={totalPortfolioValue}
+              portfolioHistory={portfolioHistory}
             />
           </div>
         )}
 
-        {portfolioHistory.length === 0 && chartDataLoaded && (
-          <div className="text-center py-12 text-gray-400">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 bg-gray-700/50 rounded-xl flex items-center justify-center">
-              <Clock className="h-8 w-8 sm:h-10 sm:w-10 text-gray-400" />
+        {/* Historical Chart - shown when no results but has saved wallets and history */}
+        {results.length === 0 && savedWallets.length > 0 && portfolioHistory.length > 0 && chartDataLoaded && (
+          <div className="space-y-6">
+            <HistoricalPortfolio 
+              mode="multisig"
+              currentPortfolioValue={lastLoadedPortfolioValue}
+              portfolioHistory={portfolioHistory}
+            />
+          </div>
+        )}
+
+        {portfolioHistory.length === 0 && chartDataLoaded && savedWallets.length > 0 && results.length === 0 && (
+          <div className="text-center py-12" style={{ color: 'var(--text-secondary)' }}>
+            <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 flex items-center justify-center" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+              <Clock className="h-8 w-8 sm:h-10 sm:w-10" />
             </div>
             <p className="text-sm sm:text-base font-medium">no portfolio history available yet</p>
             <p className="text-gray-500 text-xs sm:text-sm mt-2">analyze your wallets to generate chart data</p>

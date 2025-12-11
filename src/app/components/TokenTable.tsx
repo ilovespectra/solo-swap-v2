@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { TokenBalance, PriceProgress } from '../types/token';
-import { TokenService } from '../lib/api';
-import { ArrowUpDown, Search, Image, ChevronDown, ChevronUp, ChevronRight, RefreshCw, Settings, Eye, EyeOff, GripVertical, X } from 'lucide-react';
+import { TokenBalance } from '../types/token';
+import { ArrowUpDown, Search, ChevronDown, ChevronUp, ChevronRight, RefreshCw, Settings, Eye, EyeOff, GripVertical, X, ArrowUp, ArrowDown } from 'lucide-react';
 import { LoadingBar } from './LoadingBar';
 import { PortfolioChart } from './HistoricalChart';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, TouchSensor } from '@dnd-kit/core';
@@ -11,6 +10,91 @@ import { SortableContext, useSortable, horizontalListSortingStrategy, verticalLi
 import { CSS } from '@dnd-kit/utilities';
 import { ColumnConfig, SortField } from '../types/table';
 import { useColumnState } from '../hooks/useColumnState';
+
+const createThrottledFunction = <T extends (...args: any[]) => any>(
+  func: T,
+  limit: number
+): ((...args: Parameters<T>) => Promise<ReturnType<T>>) => {
+  let lastCall = 0;
+  const pendingCall: ReturnType<T> | null = null;
+  
+  return async (...args: Parameters<T>): Promise<ReturnType<T>> => {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastCall;
+    
+    if (timeSinceLastCall < limit) {
+      await new Promise(resolve => setTimeout(resolve, limit - timeSinceLastCall));
+    }
+    
+    lastCall = Date.now();
+    return func(...args);
+  };
+};
+
+const useRequestQueue = () => {
+  const queueRef = useRef<Array<() => Promise<any>>>([]);
+  const isProcessingRef = useRef(false);
+  
+  const processQueue = async () => {
+    if (isProcessingRef.current || queueRef.current.length === 0) return;
+    
+    isProcessingRef.current = true;
+    
+    while (queueRef.current.length > 0) {
+      const task = queueRef.current.shift();
+      if (task) {
+        try {
+          await task();
+        } catch (error) {
+          console.error('Queue task failed:', error);
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    isProcessingRef.current = false;
+  };
+  
+  const enqueueRequest = (request: () => Promise<any>) => {
+    queueRef.current.push(request);
+    if (!isProcessingRef.current) {
+      processQueue();
+    }
+  };
+  
+  return { enqueueRequest };
+};
+
+const TokenTableErrorBoundary = ({ children }: { children: React.ReactNode }) => {
+  const [hasError, setHasError] = useState(false);
+  
+  useEffect(() => {
+    const handleError = (error: ErrorEvent) => {
+      console.error('TokenTable error:', error);
+      setHasError(true);
+    };
+    
+    window.addEventListener('error', handleError);
+    return () => window.removeEventListener('error', handleError);
+  }, []);
+  
+  if (hasError) {
+    return (
+      <div className="p-6 text-center text-secondary">
+        <div className="text-lg font-semibold mb-2">temporary issue</div>
+        <div className="text-sm">please try again in a moment</div>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 px-4 py-2 bg-secondary hover:bg-primary transition-colors"
+        >
+          reload
+        </button>
+      </div>
+    );
+  }
+  
+  return <>{children}</>;
+};
 
 interface TokenTableProps {
   tokens: TokenBalance[];
@@ -34,6 +118,7 @@ interface TokenTableProps {
     token: string;
   }>; 
   excludeTokenMint?: string;
+  updatedTokens?: Set<string>;
 }
 
 type SortDirection = 'asc' | 'desc';
@@ -44,15 +129,6 @@ interface SortIconProps {
   sortDirection: SortDirection;
 }
 
-const SortIcon = ({ field, sortField, sortDirection }: SortIconProps) => {
-  if (sortField !== field) {
-    return <ArrowUpDown className="h-3 w-3 sm:h-4 sm:w-4 text-gray-500" />;
-  }
-  
-  return sortDirection === 'asc' 
-    ? <ChevronUp className="h-3 w-3 sm:h-4 sm:w-4 text-gray-400" />
-    : <ChevronDown className="h-3 w-3 sm:h-4 sm:w-4 text-gray-400" />;
-};
 
 interface TokenLogoProps {
   token: TokenBalance;
@@ -70,7 +146,7 @@ const TokenLogo = ({ token, size = 8 }: TokenLogoProps) => {
       <img
         src={token.logoURI}
         alt={token.symbol}
-        className={`rounded-full ${logoClasses} flex-shrink-0 object-cover`}
+        className={` ${logoClasses} flex-shrink-0 object-cover`}
         onError={(e) => {
           (e.target as HTMLImageElement).style.display = 'none';
         }}
@@ -79,8 +155,123 @@ const TokenLogo = ({ token, size = 8 }: TokenLogoProps) => {
   }
   
   return (
-    <div className={`bg-gradient-to-br from-purple-600 to-gray-700 rounded-full ${logoClasses} flex items-center justify-center text-white text-xs sm:text-sm font-bold flex-shrink-0`}>
+    <div style={{ 
+      background: 'linear-gradient(135deg, var(--orange-primary), var(--bg-tertiary))',
+      opacity: 0.8
+    }} className={` ${logoClasses} flex items-center justify-center text-xs sm:text-sm font-bold flex-shrink-0`}>
       {token.symbol.slice(0, 3)}
+    </div>
+  );
+};
+
+interface PerformanceIndicatorProps {
+  changePercent24h?: number;
+  className?: string;
+}
+
+const PerformanceIndicator = ({ changePercent24h, className = '' }: PerformanceIndicatorProps) => {
+  if (changePercent24h === undefined || changePercent24h === null) {
+    return null;
+  }
+
+  const isPositive = changePercent24h > 0;
+  const isNegative = changePercent24h < 0;
+  const absoluteValue = Math.abs(changePercent24h);
+
+  return (
+    <div className={`flex items-center space-x-1 ${isPositive ? 'text-green-primary' : isNegative ? 'text-orange-dark' : 'text-tertiary'} ${className}`}>
+      {isPositive ? (
+        <ArrowUp className="h-3 w-3" />
+      ) : isNegative ? (
+        <ArrowDown className="h-3 w-3" />
+      ) : null}
+      <span className="text-xs font-medium">
+        {absoluteValue.toFixed(2)}%
+      </span>
+    </div>
+  );
+};
+
+interface TokenCardProps {
+  token: TokenBalance;
+  onSelect: (mint: string, selected: boolean) => void;
+  isUpdated?: boolean;
+}
+
+const TokenCard = ({ token, onSelect, isUpdated = false }: TokenCardProps) => {
+  return (
+    <div 
+      className="card p-4 mb-3 transition-all duration-300"
+      style={{
+        background: 'var(--bg-card)',
+        borderColor: token.selected ? 'var(--orange-primary)' : 'var(--border-primary)'
+      }}
+    >
+      {/* Header with checkbox and logo */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex items-center space-x-3 flex-1 min-w-0">
+          <input
+            type="checkbox"
+            checked={token.selected}
+            onChange={(e) => onSelect(token.mint, e.target.checked)}
+            className="mobile-optimized flex-shrink-0"
+            style={{ 
+              width: '20px',
+              height: '20px'
+            }}
+          />
+          <TokenLogo token={token} size={10} />
+          <div className="min-w-0 flex-1">
+            <div className="font-bold text-base text-primary truncate lowercase">
+              {token.symbol}
+            </div>
+            <div className="text-xs text-tertiary truncate">{token.name}</div>
+          </div>
+        </div>
+        {token.changePercent24h !== undefined && token.changePercent24h !== null && (
+          <PerformanceIndicator changePercent24h={token.changePercent24h} />
+        )}
+      </div>
+
+      {/* Grid with token data */}
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="space-y-1">
+          <div className="text-tertiary text-xs">quantity</div>
+          <div className="font-mono text-secondary font-medium">
+            {token.uiAmount < 0.0001 ? token.uiAmount.toExponential(2) : token.uiAmount.toFixed(4)}
+          </div>
+        </div>
+
+        <div className="space-y-1 text-right">
+          <div className="text-tertiary text-xs">price</div>
+          <div className="font-mono text-secondary font-medium transition-all duration-500">
+            <span
+              className={isUpdated ? 'price-updated' : ''}
+              style={{
+                animationDelay: isUpdated ? '0.05s' : '0s'
+              }}
+            >
+              {token.price ? `$${token.price < 0.01 ? token.price.toExponential(2) : token.price.toFixed(2)}` : '- -'}
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="text-tertiary text-xs">value</div>
+          <div className={`font-mono font-bold transition-all duration-500 ${
+              token.value > 0 ? 'text-green-primary' : 'text-tertiary'
+            }`}>
+            <span
+              className={isUpdated ? 'price-updated' : ''}
+              style={{
+                animationDelay: isUpdated ? '0.05s' : '0s'
+              }}
+            >
+              {token.value ? `$${token.value.toFixed(2)}` : '$0.00'}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -96,14 +287,17 @@ function CollapsibleSection({ title, children, defaultOpen = true, className = '
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={`bg-gray-800/50 rounded-xl backdrop-blur-sm border border-gray-700 ${className}`}>
+    <div className={`card backdrop-blur-sm ${className}`}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between p-4 sm:p-6 text-left hover:bg-gray-700/30 transition-colors rounded-xl mobile-optimized"
+        className="w-full flex items-center justify-between p-4 sm:p-6 text-left transition-colors  mobile-optimized"
+        style={{ 
+          background: isOpen ? 'var(--bg-tertiary)' : 'transparent'
+        }}
       >
-        <h3 className="text-m font-semibold">{title}</h3>
+        <h3 className="text-m font-semibold text-orange-primary">{title}</h3>
         <ChevronRight 
-          className={`h-5 w-5 text-gray-400 transition-transform duration-200 ${
+          className={`h-5 w-5 text-secondary transition-transform duration-300 ${
             isOpen ? 'rotate-90' : ''
           }`}
         />
@@ -122,7 +316,7 @@ const defaultColumns: ColumnConfig[] = [
   { id: 'symbol', label: 'symbol', width: 120, visible: true, sortable: true, resizable: true, field: 'symbol' },
   { id: 'source', label: 'source', width: 120, visible: true, sortable: true, resizable: true, field: 'symbol' },
   { id: 'balance', label: 'quantity', width: 120, visible: true, sortable: true, resizable: true, field: 'balance' },
-  { id: 'price', label: 'price', width: 100, visible: true, sortable: true, resizable: true, field: 'USD' },
+  { id: 'price', label: 'price', width: 140, visible: true, sortable: true, resizable: true, field: 'USD' },
   { id: 'value', label: 'value', width: 120, visible: true, sortable: true, resizable: true, field: 'value' },
   { id: 'percentage', label: 'portfolio %', width: 140, visible: true, sortable: true, resizable: true, field: 'percentage' },
   { id: 'liquidation', label: 'swap amount', width: 140, visible: true, sortable: false, resizable: true, field: 'value' },
@@ -201,33 +395,33 @@ export function ResizableTableHeader({
   return (
     <th
       key={column.id}
-      style={{ width: `${column.width}px` }}
-      className="relative py-3 sm:py-4 px-2 sm:px-4 bg-gray-800/50 group select-none"
-                     >
+      style={{ width: `${column.width}px`, background: 'var(--bg-tertiary)' }}
+      className="relative py-3 sm:py-4 px-2 sm:px-4 group select-none"
+    >
       <div className="flex items-center justify-between h-full">
 
         <div className="flex items-center space-x-2 flex-1 h-full">
           {column.resizable && (
             <div
               {...listeners}
-              className="cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity p-2 -m-2 rounded mobile-optimized"
+              className="cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity p-2 -m-2  mobile-optimized"
               style={{ touchAction: 'none' }}
             >
-              <GripVertical className="h-4 w-4 text-gray-400" />
+              <GripVertical className="h-4 w-4 text-secondary" />
             </div>
           )}
 
           <div
             onClick={handleHeaderClick}
-            className={`flex-1 h-full flex items-center ${column.sortable ? 'cursor-pointer hover:text-white mobile-optimized' : ''}`}
+            className={`flex-1 h-full flex items-center ${column.sortable ? 'cursor-pointer hover:text-orange-primary mobile-optimized' : ''}`}
             style={{ touchAction: column.sortable ? 'manipulation' : 'auto' }}
           >
             <div className="flex items-center space-x-2">
-              <span className="text-xs sm:text-sm font-semibold text-gray-200 lowercase">
+              <span className="text-xs sm:text-sm font-semibold text-primary lowercase">
                 {column.label}
               </span>
               {column.sortable && sortField === column.field && (
-                <span className="text-gray-400">
+                <span className="text-orange-primary">
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </span>
               )}
@@ -237,9 +431,11 @@ export function ResizableTableHeader({
 
         {column.resizable && (
           <div
-            className="absolute right-0 top-0 bottom-0 w-6 sm:w-4 cursor-col-resize hover:bg-gray-500 active:bg-gray-400 z-20 transition-colors mobile-optimized"
+            className="absolute right-0 top-0 bottom-0 w-6 sm:w-4 cursor-col-resize z-20 transition-colors mobile-optimized"
             onPointerDown={handlePointerDown}
             style={{ touchAction: 'none' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--orange-glow)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           />
         )}
       </div>
@@ -275,29 +471,34 @@ function SortableColumnItem({ column, onToggleVisibility }: { column: ColumnConf
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      className="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg border border-gray-600 mobile-optimized"
+      style={{...style, background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)'}}
+      className="flex items-center justify-between p-4  mobile-optimized"
     >
       <div className="flex items-center space-x-3 flex-1">
         <div
           {...attributes}
           {...listeners}
-          className="cursor-grab active:cursor-grabbing p-3 -m-3 rounded-lg mobile-optimized"
+          className="cursor-grab active:cursor-grabbing p-3 -m-3  mobile-optimized"
           style={{ touchAction: 'none' }}
         >
-          <GripVertical className="h-5 w-5 text-gray-400" />
+          <GripVertical className="h-5 w-5 text-secondary" />
         </div>
-        <span className="text-base text-gray-200 lowercase flex-1">{column.label}</span>
+        <span className="text-base text-primary lowercase flex-1">{column.label}</span>
       </div>
       <button
         onClick={() => onToggleVisibility(column.id)}
-        className="p-3 hover:bg-gray-600 rounded-lg transition-colors mobile-optimized"
-        style={{ touchAction: 'manipulation', minHeight: '44px', minWidth: '44px' }}
+        className="p-3  transition-colors mobile-optimized"
+        style={{ 
+          touchAction: 'manipulation', 
+          minHeight: '44px', 
+          minWidth: '44px',
+          background: 'var(--bg-secondary)'
+        }}
       >
         {column.visible ? (
-          <Eye className="h-5 w-5 text-green-400" />
+          <Eye className="h-5 w-5 text-green-primary" />
         ) : (
-          <EyeOff className="h-5 w-5 text-gray-400" />
+          <EyeOff className="h-5 w-5 text-secondary" />
         )}
       </button>
     </div>
@@ -326,7 +527,8 @@ export function TokenTable({
   processingProgress,
   totalToProcess,
   portfolioHistory = [],
-  excludeTokenMint
+  excludeTokenMint,
+  updatedTokens = new Set()
 }: TokenTableProps) {
   const [sortField, setSortField] = useState<SortField>('value');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -336,31 +538,45 @@ export function TokenTable({
   const [showColumnPanel, setShowColumnPanel] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
   const [hideZeroValueTokens, setHideZeroValueTokens] = useState(true);
+  const [isMobileView, setIsMobileView] = useState(false);
+
+  const { enqueueRequest } = useRequestQueue();
+
+  useEffect(() => {
+    const checkMobileView = () => {
+      setIsMobileView(window.innerWidth < 700);
+    };
+    
+    checkMobileView();
+    window.addEventListener('resize', checkMobileView);
+    
+    return () => window.removeEventListener('resize', checkMobileView);
+  }, []);
   
-const {
+  const {
     columns,
     updateColumnWidth,
     toggleColumnVisibility,
     reorderColumns,
     resetColumns,
-   } = useColumnState();
+  } = useColumnState();
 
   const sensors = useSensors(
-  useSensor(PointerSensor, {
-    activationConstraint: {
-      distance: 3,
-    },
-  }),
-  useSensor(TouchSensor, {
-    activationConstraint: {
-      delay: 150,
-      tolerance: 8,
-    },
-  }),
-  useSensor(KeyboardSensor, {
-    coordinateGetter: sortableKeyboardCoordinates,
-  })
-);
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 150,
+        tolerance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   useEffect(() => {
     setIsMounted(true);
@@ -437,22 +653,32 @@ const {
     }
   };
 
+  useEffect(() => {
+  }, []);
+
+  useEffect(() => {
+    if (retryLoading) {
+    }
+  }, [retryLoading, failedTokens.length]);
+
   const handleRetryFailedTokens = async () => {
     if (failedTokens.length === 0 || retryLoading) return;
     
     setRetryLoading(true);
     setRetryProgress({ current: 0, total: failedTokens.length });
     
-    try {
-      if (onRefreshPrices) {
-        onRefreshPrices();
+    enqueueRequest(async () => {
+      try {
+        if (onRefreshPrices) {
+          await onRefreshPrices();
+        }
+      } catch (error) {
+        console.error('failed to retry tokens:', error);
+      } finally {
+        setRetryLoading(false);
+        setRetryProgress({ current: 0, total: 0 });
       }
-    } catch (error) {
-      console.error('failed to retry tokens:', error);
-    } finally {
-      setRetryLoading(false);
-      setRetryProgress({ current: 0, total: 0 });
-    }
+    });
   };
 
   const isRetryLoading = retryLoading && retryProgress.total > 0;
@@ -478,7 +704,7 @@ const {
             type="checkbox"
             checked={token.selected}
             onChange={(e) => onTokenSelect(token.mint, e.target.checked)}
-            className="rounded-lg bg-gray-800 border-gray-700 text-gray-500 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-800 w-4 h-4 sm:w-5 sm:h-5 transition-all duration-200 mobile-optimized"
+            className="border-primary text-orange-primary focus:ring-2 focus:ring-orange-primary focus:ring-offset-2 focus:ring-offset-secondary mx-0 w-4 h-4 sm:w-5 sm:h-5 transition-all duration-300 mobile-optimized"
             style={{ touchAction: 'manipulation' }}
           />
         );
@@ -488,34 +714,55 @@ const {
           <div className="flex items-center space-x-2 sm:space-x-3 lowercase">
             <TokenLogo token={token} size={8} />
             <div className="min-w-0 flex-1">
-              <div className="font-semibold text-sm sm:text-base text-white truncate">
+              <div className="font-semibold text-sm sm:text-base text-primary truncate">
                 {token.symbol}
               </div>
-              <div className="text-xs text-gray-400 truncate">{token.name}</div>
+              <div className="text-xs text-secondary truncate">{token.name}</div>
             </div>
           </div>
         );
       
       case 'balance':
         return (
-          <div className="text-right text-xs sm:text-sm font-mono text-gray-200">
+          <div className="text-right text-xs sm:text-sm font-mono text-primary">
             {token.uiAmount < 0.0001 ? token.uiAmount.toExponential(2) : token.uiAmount.toFixed(4)}
           </div>
         );
       
       case 'price':
         return (
-          <div className="text-right text-xs sm:text-sm font-mono text-gray-200">
-            {token.price ? `$${token.price < 0.01 ? token.price.toExponential(2) : token.price.toFixed(2)}` : '- -'}
+          <div className="text-right">
+            <div className="text-xs sm:text-sm font-mono text-primary transition-all duration-500">
+              <span 
+                className={updatedTokens.has(token.mint) ? 'price-updated' : ''}
+                style={{
+                  animationDelay: updatedTokens.has(token.mint) ? `${(filteredAndSortedTokens.findIndex(t => t.mint === token.mint) * 0.05)}s` : '0s'
+                }}
+              >
+                {token.price ? `$${token.price < 0.01 ? token.price.toExponential(2) : token.price.toFixed(2)}` : '- -'}
+              </span>
+            </div>
+            {token.changePercent24h !== undefined && token.changePercent24h !== null && (
+              <div className="mt-1 flex justify-end transition-all duration-500">
+                <PerformanceIndicator changePercent24h={token.changePercent24h} />
+              </div>
+            )}
           </div>
         );
       
       case 'value':
         return (
-          <div className={`text-right text-xs sm:text-sm font-mono font-semibold ${
-            token.value > 0 ? 'text-green-400' : 'text-gray-400'
-          }`}>
-            {token.value ? `$${token.value.toFixed(2)}` : '$0.00'}
+          <div className={`text-right text-xs sm:text-sm font-mono font-semibold transition-all duration-500 ${
+              token.value > 0 ? 'text-green-primary' : 'text-tertiary'
+            }`}>
+            <span
+              className={updatedTokens.has(token.mint) ? 'price-updated' : ''}
+              style={{
+                animationDelay: updatedTokens.has(token.mint) ? `${(filteredAndSortedTokens.findIndex(t => t.mint === token.mint) * 0.05)}s` : '0s'
+              }}
+            >
+              {token.value ? `$${token.value.toFixed(2)}` : '$0.00'}
+            </span>
           </div>
         );
       
@@ -552,7 +799,7 @@ const {
         <CollapsibleSection 
           title="performance"
           defaultOpen={true}
-          className="bg-gray-900/30 rounded-xl border border-gray-700/30"
+          className=""
         >
           <PortfolioChart 
             className="w-full"
@@ -568,17 +815,22 @@ const {
       <CollapsibleSection 
         title="search"
         defaultOpen={true}
-        className="bg-gray-800/30 rounded-xl border border-gray-700/30"
+        className=""
       >
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-secondary h-5 w-5" />
             <input
               type="text"
               placeholder="search tokens by name or symbol..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent text-sm placeholder-gray-400"
+              style={{ 
+                background: 'var(--bg-tertiary)',
+                borderColor: 'var(--border-secondary)',
+                color: 'var(--text-primary)'
+              }}
+              className="w-full pl-10 pr-4 py-3 border  focus:outline-none text-sm"
             />
           </div>
           
@@ -586,11 +838,13 @@ const {
             <button
               onClick={handleRetryFailedTokens}
               disabled={retryLoading}
-              className="px-4 py-3 bg-gray-600 hover:bg-gray-600 border border-gray-500 rounded-lg disabled:opacity-50 transition-colors text-sm font-medium text-white"
+              className="btn-primary px-4 py-3  disabled:opacity-50 text-sm font-medium"
             >
               {retryLoading ? (
                 <div className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <div className="h-4 w-4 text-white" style={{ color: 'white' }}>
+                    <div className="circular-dot-spinner"></div>
+                  </div>
                   <span className="text-sm">retrying...</span>
                 </div>
               ) : (
@@ -603,15 +857,18 @@ const {
         </div>
 
         {selectedTokens.length > 0 && (
-          <div className="bg-gray-700/20 border border-gray-500/30 rounded-lg p-4 mt-4">
+          <div className=" p-4 mt-4" style={{ 
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-success)'
+          }}>
             <div className="flex justify-between items-center text-sm">
               <div className="flex items-center space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-                <span className="text-gray-200 font-medium">
+                <div className="w-2 h-2 " style={{ background: 'var(--orange-primary)' }}></div>
+                <span className="text-primary font-medium">
                   {selectedTokens.length} token{selectedTokens.length !== 1 ? 's' : ''} selected
                 </span>
               </div>
-              <span className="text-green-400 font-bold">
+              <span className="text-green-primary font-bold">
                 ${totalSelectedValue.toFixed(2)}
               </span>
             </div>
@@ -622,24 +879,41 @@ const {
       <CollapsibleSection 
         title={`tokens • ${filteredAndSortedTokens.length} of ${tokens.length}`}
         defaultOpen={true}
-        className="bg-gray-800/30 rounded-xl border border-gray-700/30 overflow-hidden"
+        className="bg-tertiary  border border-primary overflow-hidden"
       >
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setHideZeroValueTokens(!hideZeroValueTokens)}
-            className="flex items-center space-x-1 p-1 hover:bg-gray-700/50 rounded transition-colors text-gray-400 mobile-optimized"
+            className="flex items-center space-x-1 p-1 hover:bg-secondary  transition-colors text-secondary mobile-optimized"
             style={{ touchAction: 'manipulation' }}
           >
-            <span>show 0&apos;s & </span>
+            <span>show 0&apos;s</span>
             <ChevronDown
-              className={`h-4 w-4 transition-transform duration-200 ${
+              className={`h-4 w-4 transition-transform duration-300 ${
                 hideZeroValueTokens ? 'rotate-180' : ''
               }`}
             />
           </button>
         </div>
         
-        {isMounted ? (
+        {/* Mobile Card View */}
+        {isMobileView ? (
+          <div className="space-y-3 mt-4">
+            {filteredAndSortedTokens.map((token) => (
+              <TokenCard 
+                key={token.mint}
+                token={token}
+                onSelect={onTokenSelect}
+                isUpdated={updatedTokens.has(token.mint)}
+              />
+            ))}
+            {filteredAndSortedTokens.length === 0 && (
+              <div className="text-center py-8 text-tertiary">
+                no tokens found
+              </div>
+            )}
+          </div>
+        ) : isMounted ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -658,7 +932,7 @@ const {
                     <col style={{ width: '48px' }} />
                   </colgroup>
                   <thead>
-                    <tr className="border-b border-gray-700/70 bg-gray-800/50">
+                    <tr className="border-b border-primary bg-secondary">
                       {visibleColumns.map((column) => (
                         <ResizableTableHeader
                           key={column.id}
@@ -670,14 +944,14 @@ const {
                         />
                       ))}
 
-                      <th className="py-3 sm:py-4 px-2 sm:px-4 w-12 bg-gray-800/50 relative z-20"> 
+                      <th className="py-3 sm:py-4 px-2 sm:px-4 w-12 bg-secondary relative z-20 hidden sm:table-cell"> 
                         <div className="relative">
                           <button
                             onClick={() => setShowColumnPanel(!showColumnPanel)}
-                            className="p-1 hover:bg-gray-700/50 rounded transition-colors mobile-optimized"
+                            className="p-1 hover:bg-tertiary  transition-colors mobile-optimized"
                             style={{ touchAction: 'manipulation' }}
                           >
-                            <Settings className="h-4 w-4 text-gray-400" />
+                            <Settings className="h-4 w-4 text-primary" />
                           </button>
                         </div>
                       </th>
@@ -689,9 +963,9 @@ const {
                     {filteredAndSortedTokens.map((token, index) => (
                       <tr 
                         key={token.mint} 
-                        className={`border-b border-gray-700/30 hover:bg-gray-700/40 transition-all duration-200 group ${
+                        className={`border-b border-primary hover:bg-tertiary transition-all duration-300 group ${
                           token.value === 0 && token.uiAmount > 0 ? 'opacity-70' : ''
-                        } ${index % 2 === 0 ? 'bg-gray-800/20' : 'bg-gray-800/10'}`}
+                        } ${index % 2 === 0 ? 'bg-secondary' : 'bg-primary'}`}
                       >
                         {visibleColumns.map(column => (
                           <td
@@ -715,39 +989,39 @@ const {
           <div className="overflow-x-auto mobile-scroll" style={{ touchAction: 'pan-x' }}>
             <table className="w-full min-w-[500px] sm:min-w-full token-table-mobile">
               <thead>
-                <tr className="border-b border-gray-700/70 bg-gray-800/50">
+                <tr className="border-b border-primary bg-secondary">
                   
                   {visibleColumns.map((column) => (
                     <th
                       key={column.id}
                       style={{ width: column.width }}
-                      className="relative py-3 sm:py-4 px-2 sm:px-4 bg-gray-800/50 group select-none"
+                      className="relative py-3 sm:py-4 px-2 sm:px-4 bg-secondary group select-none"
                     >
                       <div className="flex items-center justify-between h-full">
                         {column.resizable && (
                           <div
-                            className="absolute left-0 top-0 bottom-0 w-4 cursor-col-resize hover:bg-gray-500 active:bg-gray-400 z-10 touch-manipulation"
+                            className="absolute left-0 top-0 bottom-0 w-4 cursor-col-resize hover:bg-orange-primary active:bg-orange-dark z-10 touch-manipulation"
                           />
                         )}
                         
                         <div className="flex items-center space-x-2 flex-1 h-full">
                           {column.resizable && (
                             <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                              <GripVertical className="h-4 w-4 text-gray-400" />
+                              <GripVertical className="h-4 w-4 text-secondary" />
                             </div>
                           )}
                           
                           <div
                             onClick={() => column.sortable && handleSort(column.field)}
-                            className={`flex-1 h-full flex items-center ${column.sortable ? 'cursor-pointer hover:text-white mobile-optimized' : ''}`}
+                            className={`flex-1 h-full flex items-center ${column.sortable ? 'cursor-pointer hover:text-primary mobile-optimized' : ''}`}
                             style={{ touchAction: column.sortable ? 'manipulation' : 'auto' }}
                           >
                             <div className="flex items-center space-x-2">
-                              <span className="text-xs sm:text-sm font-semibold text-gray-200 lowercase">
+                              <span className="text-xs sm:text-sm font-semibold text-primary lowercase">
                                 {column.label}
                               </span>
                               {column.sortable && sortField === column.field && (
-                                <span className="text-gray-400">
+                                <span className="text-secondary">
                                   {sortDirection === 'asc' ? '↑' : '↓'}
                                 </span>
                               )}
@@ -757,21 +1031,21 @@ const {
 
                         {column.resizable && (
                           <div
-                            className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize hover:bg-purple-400 active:bg-purple-400 z-10 touch-manipulation"
+                            className="absolute right-0 top-0 bottom-0 w-4 cursor-col-resize hover:bg-orange-primary active:bg-orange-dark z-10 touch-manipulation"
                           />
                         )}
                       </div>
                     </th>
                   ))}
 
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 w-12 bg-gray-800/50 relative z-20"> 
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 w-12 bg-secondary relative z-20"> 
                     <div className="relative">
                       <button
                         onClick={() => setShowColumnPanel(!showColumnPanel)}
-                        className="p-1 hover:bg-gray-700/50 rounded transition-colors mobile-optimized"
+                        className="p-1 hover:bg-tertiary  transition-colors mobile-optimized"
                         style={{ touchAction: 'manipulation' }}
                       >
-                        <Settings className="h-4 w-4 text-gray-400" />
+                        <Settings className="h-4 w-4 text-primary" />
                       </button>
                     </div>
                   </th>
@@ -783,9 +1057,9 @@ const {
                 {filteredAndSortedTokens.map((token, index) => (
                   <tr 
                     key={token.mint} 
-                    className={`border-b border-gray-700/30 hover:bg-gray-700/40 transition-all duration-200 group ${
+                    className={`border-b border-primary hover:bg-tertiary transition-all duration-300 group ${
                       token.value === 0 && token.uiAmount > 0 ? 'opacity-70' : ''
-                    } ${index % 2 === 0 ? 'bg-gray-800/20' : 'bg-gray-800/10'}`}
+                    } ${index % 2 === 0 ? 'bg-secondary' : 'bg-primary'}`}
                   >
                     {visibleColumns.map(column => (
                       <td 
@@ -805,25 +1079,16 @@ const {
           </div>
         )}
 
-                <div className="sm:hidden text-center text-xs text-gray-500 pt-3 pb-2 border-t border-gray-700/30 mt-2">
-          <div className="flex items-center justify-center space-x-2">
-            <div className="w-1 h-1 bg-gray-500 rounded-full"></div>
-            <span>scroll horizontally to view all columns</span>
-            <div className="w-1 h-1 bg-gray-500 rounded-full"></div>
-          </div>
-        </div>
-
       </CollapsibleSection>
 
-      {/* ADD THE COLUMN SETTINGS PANEL RIGHT HERE */}
       {showColumnPanel && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
+          <div className="bg-secondary  p-6 max-w-md w-full max-h-[80vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold">settings</h3>
               <button
                 onClick={() => setShowColumnPanel(false)}
-                className="text-gray-400 hover:text-white p-2 rounded-lg transition-colors mobile-optimized"
+                className="text-secondary hover:text-primary p-2  transition-colors mobile-optimized"
                 style={{ touchAction: 'manipulation' }}
               >
                 <X className="h-5 w-5" />
@@ -831,7 +1096,7 @@ const {
             </div>
             
             <div className="space-y-3 mb-6">
-              <p className="text-sm text-gray-400">
+              <p className="text-sm text-secondary">
                 drag to reorder columns, toggle visibility with the eye icon
               </p>
             </div>
@@ -857,30 +1122,33 @@ const {
               </SortableContext>
             </DndContext>
 
-            <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+            <div className="flex justify-between items-center mt-6 pt-4 border-t border-primary">
               <button
                 onClick={resetColumns}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-sm font-medium mobile-optimized"
+                className="px-4 py-2 bg-tertiary hover:bg-secondary  transition-colors text-sm font-medium mobile-optimized"
                 style={{ touchAction: 'manipulation' }}
               >
-                Reset to Default
+                reset to default
               </button>
               <button
                 onClick={() => setShowColumnPanel(false)}
-                className="px-4 py-2 bg-gradient-to-r from-gray-600 to-black-600 hover:from-gray-500 hover:to-black-500 rounded-lg transition-colors text-sm font-medium mobile-optimized"
+                className="px-4 py-2 bg-gradient-to-r from-gray-600 to-black-600 hover:from-gray-500 hover:to-black-500  transition-colors text-sm font-medium mobile-optimized"
                 style={{ touchAction: 'manipulation' }}
               >
-                Done
+                done
               </button>
             </div>
           </div>
         </div>
       )}
-      
     </div>
   );
 }
 
-function reorderColumns(oldIndex: number, newIndex: number) {
-  throw new Error('Function not implemented.');
+export default function TokenTableWrapper(props: TokenTableProps) {
+  return (
+    <TokenTableErrorBoundary>
+      <TokenTable {...props} />
+    </TokenTableErrorBoundary>
+  );
 }

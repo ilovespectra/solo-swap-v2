@@ -2,12 +2,14 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { VersionedTransaction } from '@solana/web3.js';
+import { VersionedTransaction, SystemProgram, TransactionMessage, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TokenBalance } from '../types/token';
 import { TokenService } from '../lib/api';
 import { SwapBatchRecord, SwapTokenInput } from '../types/history';
 import { encryptionService } from '../lib/encryption';
-import { ArrowUpDown, Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield, ChevronDown, Search, X, ExternalLinkIcon, Copy } from 'lucide-react';
+import { triggerSwapHistoryRefresh } from './SwapHistoryPanel';
+import bs58 from 'bs58';
+import { Calculator, AlertCircle, ExternalLink, RefreshCw, DollarSign, ShoppingCart, Shield, ChevronDown, Search, X, Copy, Info } from 'lucide-react';
 
 interface SwapInterfaceProps {
   selectedTokens: TokenBalance[];
@@ -20,6 +22,17 @@ interface SwapInterfaceProps {
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const HISTORY_ENABLED = process.env.NEXT_PUBLIC_ENABLE_HISTORY === 'true';
+
+const JITO_TIP_ACCOUNTS = [
+  '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
+  'HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe',
+  'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY',
+  'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49',
+  'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh',
+  'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt',
+  'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL',
+  '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT'
+];
 
 interface SwapResult {
   symbol: string;
@@ -76,8 +89,6 @@ export function SwapInterface({
   const { connection } = useConnection();
   const { publicKey, signTransaction, sendTransaction, wallet } = useWallet();
 
-  const [isClient, setIsClient] = useState(false);
-  
   const [outputToken, setOutputToken] = useState(USDC_MINT);
   const [showTokenSelector, setShowTokenSelector] = useState(false);
   const tokenSelectorRef = useRef<HTMLDivElement>(null);
@@ -90,27 +101,32 @@ export function SwapInterface({
   const getActionVerb = useMemo(() => isLiquidation ? 'liquidate' : 'swap pro-rata', [isLiquidation]);
   const getProcessName = useMemo(() => isLiquidation ? 'liquidation' : 'swap', [isLiquidation]);
 
+  const fetchPopularTokens = useCallback(async () => {
+    const cached = sessionStorage.getItem('popular-tokens-cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 3600000) {
+          setPopularTokens(parsed.tokens);
+          return;
+        }
+      } catch {
+      }
+    }
 
-  useEffect(() => {
-    fetchPopularTokens();
-  }, []);
-
-  
-
-  const fetchPopularTokens = async () => {
     try {
       const response = await fetch('https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/src/tokens/solana.tokenlist.json');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
       const data = await response.json();
       const tokens = data.tokens;
       
       const popularSymbols = ['SOL', 'USDC', 'USDT', 'BONK', 'JUP', 'RAY', 'ORCA', 'SRM', 'MSOL', 'JITO'];
-      const topTokens = popularSymbols.map(symbol => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const token = tokens.find((t: any) => t.symbol === symbol);
-        if (token) {
+      const topTokens = popularSymbols
+        .map(symbol => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const token = tokens.find((t: any) => t.symbol === symbol);
+          if (!token) return null;
           return {
             mint: token.address,
             symbol: token.symbol,
@@ -121,11 +137,12 @@ export function SwapInterface({
             value: 0,
             price: 0
           };
-        }
-        return null;
-      }).filter(Boolean).slice(0, 10) as TokenBalance[];
+        })
+        .filter(Boolean)
+        .slice(0, 10) as TokenBalance[];
       
       setPopularTokens(topTokens);
+      sessionStorage.setItem('popular-tokens-cache', JSON.stringify({ tokens: topTokens, timestamp: Date.now() }));
     } catch (error) {
       console.error('Failed to fetch popular tokens:', error);
       setPopularTokens([
@@ -138,7 +155,8 @@ export function SwapInterface({
           uiAmount: 0,
           value: 0,
           price: 0,
-          selected: false
+          selected: false,
+          changePercent24h: null
         },
         {
           mint: SOL_MINT,
@@ -149,15 +167,25 @@ export function SwapInterface({
           uiAmount: 0,
           value: 0,
           price: 0,
-          selected: false
+          selected: false,
+          changePercent24h: null
         }
       ]);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    setIsClient(true);
-  }, []);
+    fetchPopularTokens();
+  }, [fetchPopularTokens]);
+
+  useEffect(() => {
+    if (prevTotalSelectedValue.current !== totalSelectedValue && totalSelectedValue > 0) {
+      setValueUpdated(true);
+      const timer = setTimeout(() => setValueUpdated(false), 800);
+      prevTotalSelectedValue.current = totalSelectedValue;
+      return () => clearTimeout(timer);
+    }
+  }, [totalSelectedValue]);
   
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -182,6 +210,11 @@ export function SwapInterface({
   const [currentStep, setCurrentStep] = useState<string>('');
   const [swapResults, setSwapResults] = useState<SwapResult[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [useJitoBundling, setUseJitoBundling] = useState(false);
+  const [jitoTipLamports, setJitoTipLamports] = useState<number>(100000);
+  const [valueUpdated, setValueUpdated] = useState(false);
+  const [failedTokens, setFailedTokens] = useState<ProRataToken[]>([]);
+  const prevTotalSelectedValue = useRef(totalSelectedValue);
 
   const isLedgerConnected = useMemo(() => {
     return wallet?.adapter?.name?.toLowerCase().includes('ledger');
@@ -338,7 +371,7 @@ export function SwapInterface({
       : "w-6 h-6 sm:w-8 sm:h-8";
     
     return (
-      <div className={`bg-gradient-to-br from-gray-500 to-gray-600 rounded-full ${logoClasses} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
+      <div className={`bg-gradient-to-br from-gray-500 to-gray-600  ${logoClasses} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
         ???
       </div>
     );
@@ -354,7 +387,7 @@ export function SwapInterface({
       <img
         src={token.logoURI}
         alt={token.symbol}
-        className={`rounded-full ${logoClasses} flex-shrink-0 object-cover`}
+        className={` ${logoClasses} flex-shrink-0 object-cover`}
         onError={(e) => {
           (e.target as HTMLImageElement).style.display = 'none';
           (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
@@ -364,7 +397,7 @@ export function SwapInterface({
   }
   
   return (
-    <div className={`bg-gradient-to-br from-gray-500 to-gray-400 rounded-full ${logoClasses} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
+    <div className={`bg-gradient-to-br from-gray-500 to-gray-400  ${logoClasses} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
       {token.symbol.slice(0, 3)}
     </div>
   );
@@ -396,13 +429,15 @@ export function SwapInterface({
         await new Promise(resolve => setTimeout(resolve, 100 * attemptNumber));
       }
 
+      const inputMint = token.mint;
+      
       const quoteUrl = `https://lite-api.jup.ag/swap/v1/quote?` + new URLSearchParams({
-        inputMint: token.mint,
+        inputMint,
         outputMint: outputToken,
         amount: rawAmount.toString(),
         slippageBps: slippageBps.toString(),
         swapMode: 'ExactIn'
-      });
+      }).toString();
 
       const response = await fetch(quoteUrl);
       
@@ -424,7 +459,7 @@ export function SwapInterface({
 
       return quoteData;
 
-    } catch (err) {
+    } catch {
       return null;
     }
   };
@@ -448,6 +483,9 @@ export function SwapInterface({
         }));
 
       if (validQuotes.length === 0) {
+        if (token.symbol === 'SOL' || token.mint === SOL_MINT) {
+          throw new Error(`no quotes available for SOL. consider using a different output token`);
+        }
         throw new Error(`no valid quotes found for ${token.symbol}`);
       }
 
@@ -468,7 +506,11 @@ export function SwapInterface({
       console.error(`quote comparison failed for ${token.symbol}:`, err);
       const fallbackQuote = await fetchSingleQuote(token, 0);
       if (!fallbackQuote) {
-        throw new Error(`failed to fetch quote for ${token.symbol}: ${err instanceof Error ? err.message : 'unknown error'}`);
+        const errorMsg = err instanceof Error ? err.message : 'unknown error';
+        if (token.symbol === 'SOL' || token.mint === SOL_MINT) {
+          throw new Error(`sol swap failed - try liquidating without sol, or select usdc/usdt as output`);
+        }
+        throw new Error(`failed to fetch quote for ${token.symbol}: ${errorMsg}`);
       }
       return { quote: fallbackQuote };
     }
@@ -575,6 +617,265 @@ export function SwapInterface({
     } catch (error) {
       console.error('swap history submission failed:', error);
     }
+  };
+
+  const executeJitoBundledSwaps = async (tokens: ProRataToken[]): Promise<SwapResult[]> => {
+    const results: SwapResult[] = [];
+    const swapTransactions: { token: ProRataToken; transaction: VersionedTransaction; quote: JupiterQuoteResponse }[] = [];
+    let signedTransactions: VersionedTransaction[] = [];
+    
+    try {
+      setCurrentStep('preparing bundle for jito...');
+      
+      const { blockhash } = await getFreshBlockhash();
+      
+      setCurrentStep(`building ${tokens.length} swap transaction${tokens.length > 1 ? 's' : ''}...`);
+      
+      for (const token of tokens) {
+        try {
+          const quoteSelection = await getBestSwapQuote(token);
+          const quoteData = quoteSelection.quote;
+          
+          const swapResponse = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quoteResponse: quoteData,
+              userPublicKey: publicKey!.toString(),
+              dynamicComputeUnitLimit: true,
+              dynamicSlippage: true,
+              prioritizationFeeLamports: {
+                priorityLevelWithMaxLamports: {
+                  maxLamports: 1000000,
+                  priorityLevel: "veryHigh"
+                }
+              },
+              wrapAndUnwrapSol: true,
+              asLegacyTransaction: false,
+              useSharedAccounts: true,
+              configs: {
+                recentBlockhash: blockhash
+              }
+            })
+          });
+          
+          if (!swapResponse.ok) {
+            throw new Error(`swap build failed for ${token.symbol}`);
+          }
+          
+          const swapData: JupiterSwapResponse = await swapResponse.json();
+          if (!swapData.swapTransaction) {
+            throw new Error(`no transaction returned for ${token.symbol}`);
+          }
+          
+          const transaction = VersionedTransaction.deserialize(
+            Buffer.from(swapData.swapTransaction, 'base64')
+          );
+          
+          swapTransactions.push({ token, transaction, quote: quoteData });
+        } catch (err) {
+          console.error(`failed to build transaction for ${token.symbol}:`, err instanceof Error ? err.message : String(err));
+          results.push({
+            symbol: token.symbol,
+            mint: token.mint,
+            decimals: token.decimals,
+            amount: token.liquidationAmount,
+            inputAmount: token.swapAmount,
+            error: (err instanceof Error ? err.message : 'transaction build failed').toLowerCase(),
+            retryCount: 0
+          });
+        }
+      }
+      
+      if (swapTransactions.length === 0) {
+        throw new Error('failed to build any transactions for bundle');
+      }
+      
+      setCurrentStep(`please sign bundle of ${swapTransactions.length} swaps...`);
+      
+      if (!wallet?.adapter) {
+        throw new Error('wallet adapter not available');
+      }
+      
+      const adapter = wallet.adapter as unknown as { signAllTransactions?: (txs: VersionedTransaction[]) => Promise<VersionedTransaction[]> };
+      const supportsSignAll = typeof adapter.signAllTransactions === 'function';
+      
+      if (supportsSignAll && swapTransactions.length > 1 && adapter.signAllTransactions) {
+        try {
+          signedTransactions = await adapter.signAllTransactions(
+            swapTransactions.map(st => st.transaction)
+          );
+        } catch {
+          signedTransactions = [];
+          for (const st of swapTransactions) {
+            const signed = await signTransactionUniversal(st.transaction, st.token.symbol);
+            signedTransactions.push(signed);
+          }
+        }
+      } else {
+        signedTransactions = [];
+        for (const st of swapTransactions) {
+          const signed = await signTransactionUniversal(st.transaction, st.token.symbol);
+          signedTransactions.push(signed);
+        }
+      }
+      
+      setCurrentStep('adding jito tip to bundle...');
+      const { blockhash: tipBlockhash } = await getFreshBlockhash();
+      const tipAccount = new PublicKey(
+        JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)]
+      );
+      
+      const tipInstruction = SystemProgram.transfer({
+        fromPubkey: publicKey!,
+        toPubkey: tipAccount,
+        lamports: jitoTipLamports,
+      });
+      
+      const tipMessage = new TransactionMessage({
+        payerKey: publicKey!,
+        recentBlockhash: tipBlockhash,
+        instructions: [tipInstruction],
+      }).compileToV0Message();
+      
+      const tipTransaction = new VersionedTransaction(tipMessage);
+      const signedTipTransaction = await signTransactionUniversal(
+        tipTransaction, 
+        `tip (${(jitoTipLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL)`
+      );
+      
+      signedTransactions.push(signedTipTransaction);
+      
+      setCurrentStep('submitting bundle to jito...');
+      
+      const serializedTransactions = signedTransactions.map(tx => 
+        Buffer.from(tx.serialize()).toString('base64')
+      );
+      
+      let jitoResult: { result?: string; error?: { message: string } } | null = null;
+      let submitAttempts = 0;
+      const maxSubmitAttempts = 5;
+      
+      const jitoEndpoints = [
+        'https://mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles',
+        'https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles'
+      ];
+      
+      while (submitAttempts < maxSubmitAttempts) {
+        const endpoint = jitoEndpoints[submitAttempts % jitoEndpoints.length];
+        submitAttempts++;
+        
+        try {
+          const jitoResponse = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'sendBundle',
+              params: [serializedTransactions]
+            })
+          });
+          
+          if (!jitoResponse.ok) {
+            if (jitoResponse.status === 429 && submitAttempts < maxSubmitAttempts) {
+              setCurrentStep(`endpoint busy, trying next (${submitAttempts}/${maxSubmitAttempts})...`);
+              await new Promise(resolve => setTimeout(resolve, 500));
+              continue;
+            }
+            
+            throw new Error(`jito error (${jitoResponse.status})`);
+          }
+          
+          jitoResult = await jitoResponse.json();
+          
+          if (jitoResult && jitoResult.error) {
+            throw new Error(`jito: ${jitoResult.error.message}`);
+          }
+          
+          if (!jitoResult || !jitoResult.result) {
+            throw new Error('no bundle id returned');
+          }
+          
+          break;
+          
+        } catch (err) {
+          if (submitAttempts >= maxSubmitAttempts) {
+            throw err;
+          }
+          setCurrentStep(`retry ${submitAttempts}/${maxSubmitAttempts}...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
+      if (!jitoResult || jitoResult.error) {
+        throw new Error(jitoResult?.error?.message || 'bundle submission failed after retries');
+      }
+      
+      setCurrentStep('waiting for bundle confirmation...');
+
+      let confirmed = false;
+      let attempts = 0;
+      const maxAttempts = 60;
+      
+      const connection = tokenService.getConnection();
+      
+      while (!confirmed && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        attempts++;
+        
+        try {
+          const firstSig = bs58.encode(signedTransactions[0].signatures[0]);
+          const status = await connection.getSignatureStatus(firstSig);
+          
+          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+            confirmed = true;
+          }
+        } catch {
+        }
+      }
+      
+      if (!confirmed) {
+        throw new Error('bundle confirmation timeout');
+      }
+      
+      for (let i = 0; i < swapTransactions.length; i++) {
+        const { token, quote } = swapTransactions[i];
+        const signedTx = signedTransactions[i];
+        const signature = bs58.encode(signedTx.signatures[0]);
+        
+        const outputDecimals = outputTokenInfo?.decimals || (outputToken === SOL_MINT ? 9 : 6);
+        const outputAmount = parseInt(quote.outAmount) / Math.pow(10, outputDecimals);
+        const outputUsd = outputAmount * (outputTokenInfo?.price || (outputToken === USDC_MINT ? 1 : token.price || 0));
+        
+        results.push({
+          symbol: token.symbol,
+          mint: token.mint,
+          decimals: token.decimals,
+          signature,
+          amount: token.liquidationAmount,
+          inputAmount: token.swapAmount,
+          outputAmount,
+          outputUsd,
+          priceUsd: token.price,
+          retryCount: 0
+        });
+      }
+      
+      setCurrentStep(`bundle confirmed! ${results.length} swaps executed`);
+      
+    } catch (err) {
+      console.error('jito bundle execution failed:', err);
+      setError(err instanceof Error ? err.message.toLowerCase() : 'bundle execution failed');
+      
+      setFailedTokens(tokens);
+    }
+    
+    return results;
   };
 
   const executeSequentialSwaps = async (tokens: ProRataToken[]): Promise<SwapResult[]> => {
@@ -707,7 +1008,7 @@ export function SwapInterface({
             decimals: token.decimals,
             amount: token.liquidationAmount,
             inputAmount: token.swapAmount,
-            error: err instanceof Error ? err.message : 'unknown error',
+            error: (err instanceof Error ? err.message : 'unknown error').toLowerCase(),
             retryCount
           };
           results.push(errorResult);
@@ -749,7 +1050,31 @@ export function SwapInterface({
         throw new Error('no valid tokens with sufficient balance to liquidate');
       }
 
-      const results = await executeSequentialSwaps(validTokens);
+      let results: SwapResult[] = [];
+      
+      if (useJitoBundling) {
+        const batchSize = 5;
+        const numBatches = Math.ceil(validTokens.length / batchSize);
+        
+        setCurrentStep(`processing ${numBatches} jito bundle${numBatches > 1 ? 's' : ''}...`);
+        
+        for (let i = 0; i < numBatches; i++) {
+          const start = i * batchSize;
+          const end = Math.min(start + batchSize, validTokens.length);
+          const batchTokens = validTokens.slice(start, end);
+          
+          setCurrentStep(`bundle ${i + 1}/${numBatches}: ${batchTokens.length} swaps...`);
+          
+          const batchResults = await executeJitoBundledSwaps(batchTokens);
+          results.push(...batchResults);
+          
+          if (i < numBatches - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      } else {
+        results = await executeSequentialSwaps(validTokens);
+      }
 
       const successfulSwaps = results.filter(result => !result.error);
       const failedSwaps = results.filter(result => result.error);
@@ -767,20 +1092,106 @@ export function SwapInterface({
         
         setCurrentStep(`successfully liquidated ${successfulSwaps.length} tokens (${totalSwappedPercentage}% of selection)`);
         
-        setTimeout(() => setCurrentStep(''), 5000);
-        onSwapComplete();
+        triggerSwapHistoryRefresh();
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
       }
       
       if (failedSwaps.length > 0) {
-        const errorMsg = `${failedSwaps.length} liquidations failed. ${successfulSwaps.length > 0 ? 'partial success.' : ''}`;
+        const errorMsg = `${failedSwaps.length} liquidations failed. ${successfulSwaps.length > 0 ? 'partial success. view results above.' : 'view errors above.'}`;
         console.error('failed liquidations:', failedSwaps);
         setError(errorMsg);
       }
 
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'liquidation failed';
+      const errorMsg = (err instanceof Error ? err.message : 'liquidation failed').toLowerCase();
       setError(errorMsg);
       console.error('liquidation execution error:', err);
+    } finally {
+      setSwapping(false);
+    }
+  };
+
+  const retryBundled = async () => {
+    if (failedTokens.length === 0) return;
+    
+    setError('');
+    setSwapResults([]);
+    setSwapping(true);
+    
+    try {
+      const results = await executeJitoBundledSwaps(failedTokens);
+      setSwapResults(results);
+      
+      const successfulSwaps = results.filter(r => !r.error && r.signature);
+      const failedSwaps = results.filter(r => r.error);
+      
+      if (successfulSwaps.length > 0) {
+        if (failedSwaps.length === 0) {
+          setFailedTokens([]);
+        }
+        setCurrentStep(`bundle successful! ${successfulSwaps.length} swaps completed`);
+        triggerSwapHistoryRefresh();
+        
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
+      }
+      
+      if (failedSwaps.length > 0) {
+        setError(`${failedSwaps.length} swaps still failed. view results above.`);
+      }
+    } catch (err) {
+      const errorMsg = (err instanceof Error ? err.message : 'retry failed').toLowerCase();
+      setError(errorMsg);
+    } finally {
+      setSwapping(false);
+    }
+  };
+
+  const retryIndividually = async () => {
+    if (failedTokens.length === 0) return;
+    
+    setError('');
+    setSwapResults([]);
+    setSwapping(true);
+    
+    try {
+      const results = await executeSequentialSwaps(failedTokens);
+      setSwapResults(results);
+      
+      const successfulSwaps = results.filter(r => !r.error && r.signature);
+      const failedSwaps = results.filter(r => r.error);
+      
+      if (successfulSwaps.length > 0) {
+        if (failedSwaps.length === 0) {
+          setFailedTokens([]);
+        }
+        setCurrentStep(`${successfulSwaps.length} swaps completed individually`);
+        triggerSwapHistoryRefresh();
+        
+        if (failedSwaps.length === 0) {
+          setTimeout(() => {
+            setCurrentStep('');
+            onSwapComplete();
+          }, 8000);
+        }
+      }
+      
+      if (failedSwaps.length > 0) {
+        setError(`${failedSwaps.length} swaps still failed. view results above.`);
+        setFailedTokens(failedTokens.filter(t => results.find(r => r.mint === t.mint && r.error)));
+      }
+    } catch (err) {
+      const errorMsg = (err instanceof Error ? err.message : 'retry failed').toLowerCase();
+      setError(errorMsg);
     } finally {
       setSwapping(false);
     }
@@ -802,34 +1213,34 @@ export function SwapInterface({
   const [showFullAddress, setShowFullAddress] = useState(false);
 
   return (
-    <div className="border-b border-gray-700/50 last:border-b-0">
+    <div className="border-b border-primary last:border-b-0">
       <button
         type="button"
         onClick={() => onSelect(token)}
-        className={`w-full px-4 py-3 text-left hover:bg-gray-700/50 transition-all duration-200 flex items-center space-x-3 mobile-optimized group ${
-          isSelected ? 'bg-gray-600/20 border-r-2 border-gray-500' : ''
+        className={`w-full px-4 py-3 text-left hover:bg-tertiary transition-all duration-300 flex items-center space-x-3 mobile-optimized group ${
+          isSelected ? 'bg-tertiary border-r-2 border-green-primary' : ''
         }`}
       >
         <TokenLogo token={token} size={8} />
         <div className="flex-1 min-w-0 text-left">
           <div className="flex items-center space-x-2 mb-1">
-            <span className="font-semibold text-m text-white truncate">{token.symbol}</span>
+            <span className="font-semibold text-m text-primary truncate">{token.symbol}</span>
             {isSelected && (
-              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+              <div className="w-2 h-2 bg-green-primary  animate-pulse"></div>
             )}
           </div>
-          <div className="text-xs text-gray-400 truncate">{token.name}</div>
-          <div className="text-xs text-gray-500 font-mono truncate mt-1">
+          <div className="text-xs text-secondary truncate">{token.name}</div>
+          <div className="text-xs text-tertiary font-mono truncate mt-1">
             {showFullAddress ? token.mint : `${token.mint.slice(0, 8)}...${token.mint.slice(-8)}`}
           </div>
         </div>
         <div className="flex-shrink-0">
           {isSelected ? (
-            <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
-              <div className="w-2 h-2 bg-white rounded-full"></div>
+            <div className="w-6 h-6 bg-green-primary  flex items-center justify-center">
+              <div className="w-2 h-2 bg-primary "></div>
             </div>
           ) : (
-            <div className="w-6 h-6 border-2 border-gray-600 rounded-full group-hover:border-gray-400 transition-colors"></div>
+            <div className="w-6 h-6 border-2 border-primary  group-hover:border-secondary transition-colors"></div>
           )}
         </div>
       </button>
@@ -838,7 +1249,7 @@ export function SwapInterface({
       <div className="px-4 pb-3 pt-1 flex items-center justify-between">
         <button
           onClick={() => setShowFullAddress(!showFullAddress)}
-          className="text-xs text-gray-500 hover:text-gray-300 transition-colors mobile-optimized"
+          className="text-xs text-tertiary hover:text-secondary transition-colors mobile-optimized"
         >
           {showFullAddress ? 'show less' : 'show full address'}
         </button>
@@ -848,20 +1259,20 @@ export function SwapInterface({
               e.stopPropagation();
               navigator.clipboard.writeText(token.mint);
             }}
-            className="p-1.5 hover:bg-gray-600/50 rounded transition-colors mobile-optimized"
+            className="p-1.5 hover:bg-tertiary  transition-colors mobile-optimized"
             title="Copy mint address"
           >
-            <Copy className="h-3 w-3 text-gray-400 hover:text-white" />
+            <Copy className="h-3 w-3 text-secondary hover:text-primary" />
           </button>
           <a
             href={`https://orb.helius.dev/address/${token.mint}`}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="p-1.5 hover:bg-gray-600/50 rounded transition-colors mobile-optimized"
+            className="p-1.5 hover:bg-tertiary  transition-colors mobile-optimized"
             title="view on orb explorer"
           >
-            <ExternalLink className="h-3 w-3 text-gray-400 hover:text-white" />
+            <ExternalLink className="h-3 w-3 text-secondary hover:text-primary" />
           </a>
         </div>
       </div>
@@ -880,16 +1291,16 @@ export function SwapInterface({
   };
 
   return (
-  <div className="bg-gray-900/50 p-4 -mr-8 sm:p-6 backdrop-blur-sm border border-gray-800 h-fit mobile-optimized relative z-10">
+  <div className="bg-secondary p-4 sm:p-6 backdrop-blur-sm border border-primary h-fit mobile-optimized relative z-10 overflow-x-hidden">
     
     <h2 className="text-m sm:text-l font-semibold mb-4 sm:mb-6 flex items-center space-x-2">
       <ShoppingCart className="h-4 w-4 sm:h-5 sm:w-5 ml-2" />
       <span>cart</span>
     </h2>
 
-    <div className="max-h-[calc(100vh-200px)] overflow-y-auto mobile-scroll pr-2 -mr-2">
+    <div className="max-h-[calc(100vh-200px)] lg:max-h-none overflow-y-auto lg:overflow-y-visible overflow-x-hidden mobile-scroll lg:pr-0 pr-2 -mr-2 lg:mr-0">
       {selectedTokens.length === 0 ? (
-      <div className="text-center py-6 sm:py-8 text-gray-400 justify-items-center">
+      <div className="text-center py-6 sm:py-8 text-tertiary justify-items-center">
         <Calculator className="h-8 w-8 sm:h-12 sm:w-12 mx-auto mb-3 sm:mb-4 opacity-50" />
         <p className="text-m sm:text-base">select tokens to enable {isLiquidation ? 'liquidation' : 'pro-rata swap'}</p>
       </div>
@@ -903,14 +1314,16 @@ export function SwapInterface({
             </div>
             <div className="flex justify-between text-xs sm:text-m ml-3 mr-3">
               <span>value:</span>
-              <span>${totalSelectedValue.toFixed(2)}</span>
+              <span className={`transition-all ${valueUpdated ? 'price-updated' : ''}`}>
+                ${totalSelectedValue.toFixed(2)}
+              </span>
             </div>
 
             {/* Percentage Selector */}
             <div className="space-y-2 sm:space-y-3">
               <div className="flex justify-between text-xs sm:text-m ml-3 mr-3">
-                <span className="text-gray-300">percentage:</span>
-                <span className="text-gray-300 font-medium">
+                <span className="text-secondary">percentage:</span>
+                <span className="text-secondary font-medium">
                   {liquidationPercentage}%
                 </span>
               </div>
@@ -923,18 +1336,22 @@ export function SwapInterface({
                   step="1"
                   value={liquidationPercentage}
                   onChange={(e) => setLiquidationPercentage(Number(e.target.value))}
-                  className="w-full h-2 bg-gray-700 appearance-none cursor-pointer slider mobile-optimized"
+                  className="w-full h-2 appearance-none cursor-pointer slider mobile-optimized"
+                  style={{ background: 'var(--bg-tertiary)' }}
                 />
-                <div className="flex justify-between text-xs text-gray-400 mobile-button-group">
+                <div className="flex justify-between text-xs text-tertiary mobile-button-group">
                   {[0, 25, 50, 75, 100].map((percent) => (
                     <button
                       key={percent}
                       onClick={() => setLiquidationPercentage(percent)}
-                      className={`px-1 sm:px-2 py-1 rounded text-xs ${
+                      className={`px-1 sm:px-2 py-1  text-xs transition-colors ${
                         liquidationPercentage === percent 
-                          ? 'bg-gray-600 text-white' 
-                          : 'hover:bg-gray-700'
+                          ? 'text-primary' 
+                          : 'hover:bg-tertiary'
                       }`}
+                      style={{
+                        background: liquidationPercentage === percent ? 'var(--bg-tertiary)' : 'transparent'
+                      }}
                     >
                       {percent}%
                     </button>
@@ -943,26 +1360,30 @@ export function SwapInterface({
               </div>
             </div>
 
-            <div className="bg-gray-700/50 rounded-lg p-3 sm:p-4 space-y-2 ml-2 mr-2">
+            <div className="bg-tertiary  p-3 sm:p-4 space-y-2 ml-2 mr-2">
             <div className="flex justify-between text-xs sm:text-m">
-              <span className="text-gray-300">to {getActionVerb}</span>
-              <span className="text-red-500 font-medium">
+              <span className="text-secondary">to {getActionVerb}</span>
+              <span className={`text-orange-primary font-medium transition-all ${
+                valueUpdated ? 'price-updated' : ''
+              }`}>
                 ${liquidationValue.toFixed(2)}
               </span>
             </div>
             <div className="flex justify-between text-xs sm:text-m">
-              <span className="text-gray-300 lowercase">receive in {outputTokenSymbol}</span>
-              <span className="text-green-500 font-medium">
+              <span className="text-secondary lowercase">receive in {outputTokenSymbol}</span>
+              <span className={`text-green-primary font-medium transition-all ${
+                valueUpdated ? 'price-updated' : ''
+              }`}>
                 ~${liquidationValue.toFixed(2)}
               </span>
             </div>
           </div>
             
             {/* Advanced Settings Toggle */}
-            <div className="border-t border-gray-600 pt-3">
+            <div className="border-t border-primary pt-3">
               <button
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center space-x-2 text-xs sm:text-m text-gray-300 hover:text-white transition-colors w-full mobile-optimized ml-3"
+                className="flex items-center space-x-2 text-xs sm:text-m text-secondary hover:text-primary transition-colors w-full mobile-optimized ml-3"
               >
                 <span>advanced settings</span>
                 <ChevronDown className={`h-3 w-3 sm:h-4 sm:w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
@@ -972,30 +1393,113 @@ export function SwapInterface({
             {/* Advanced Settings */}
             {showAdvanced && (
               <div className="space-y-3 sm:space-y-4 animate-slideDown ml-3 mr-3">
+                {/* Jito Bundling Toggle */}
+                <div className={`border p-3 sm:p-4 transition-all duration-300 ${
+                  useJitoBundling 
+                    ? 'bg-green-primary/5 border-green-primary shadow-lg shadow-green-primary/20' 
+                    : 'bg-tertiary border-primary'
+                }`}>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <label className="flex items-center space-x-2 cursor-pointer mobile-optimized">
+                        <input
+                          type="checkbox"
+                          checked={useJitoBundling}
+                          onChange={(e) => setUseJitoBundling(e.target.checked)}
+                          className="border-primary text-orange-primary focus:ring-2 focus:ring-orange-primary w-4 h-4"
+                        />
+                        <div className="flex-1 flex items-center space-x-2">
+                          <div className="text-xs sm:text-sm font-medium text-primary">
+                            jito bundle
+                          </div>
+                          <div className="group/tooltip relative inline-block">
+                            <Info className="h-3 w-3 text-secondary hover:text-green-primary cursor-help transition-colors" />
+                            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 hidden group-hover/tooltip:block w-64 p-3 bg-secondary border border-green-primary text-xs text-primary z-50 shadow-xl shadow-green-primary/30 pointer-events-none">
+                              bundle up to 5 swaps into one transaction requiring only 1 signature. faster and more efficient.
+                            </div>
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                    <Shield className={`h-5 w-5 ml-2 flex-shrink-0 transition-all duration-300 ${
+                      useJitoBundling ? 'text-green-primary drop-shadow-[0_0_8px_rgba(0,255,136,0.5)]' : 'text-secondary'
+                    }`} />
+                  </div>
+                  {useJitoBundling && selectedTokens.length > 5 && (
+                    <div className="mt-2 text-xs text-green-primary bg-green-primary/10 p-2 border border-green-primary/30">
+                      ✓ {selectedTokens.length} tokens will be batched into {Math.ceil(selectedTokens.length / 5)} bundles of up to 5 swaps each
+                    </div>
+                  )}
+                  
+                  {/* Jito Tip Amount */}
+                  {useJitoBundling && (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-xs font-medium text-secondary">
+                        jito tip (optional, recommended)
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <input
+                          type="number"
+                          value={(jitoTipLamports / LAMPORTS_PER_SOL).toFixed(4)}
+                          onChange={(e) => {
+                            const sol = parseFloat(e.target.value);
+                            if (!isNaN(sol) && sol >= 0) {
+                              setJitoTipLamports(Math.floor(sol * LAMPORTS_PER_SOL));
+                            }
+                          }}
+                          step="0.0001"
+                          min="0"
+                          className="flex-1 bg-secondary border border-primary px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-primary"
+                        />
+                        <span className="text-xs text-secondary whitespace-nowrap">SOL</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {[0.0001, 0.0005, 0.001, 0.005].map(amount => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => setJitoTipLamports(Math.floor(amount * LAMPORTS_PER_SOL))}
+                            className={`text-xs px-2 py-1 border transition-colors ${
+                              jitoTipLamports === Math.floor(amount * LAMPORTS_PER_SOL)
+                                ? 'bg-orange-primary border-orange-primary text-primary'
+                                : 'bg-tertiary border-primary text-secondary hover:border-orange-primary'
+                            }`}
+                          >
+                            {amount} SOL
+                          </button>
+                        ))}
+                      </div>
+                      <div className="text-xs text-tertiary">
+                        recommended: 0.0001-0.001 SOL. higher tips may improve bundle landing success rate.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Output Token Selection with Search */}
                 <div className="relative" ref={tokenSelectorRef}>
                   <label className="block text-xs sm:text-m font-medium mb-2">output token</label>
                   <button
                     type="button"
                     onClick={() => setShowTokenSearch(!showTokenSearch)}
-                    className="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-m focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent mobile-optimized flex items-center justify-between hover:bg-gray-600/50 transition-all duration-200"
+                    className="w-full bg-tertiary border border-primary  px-4 py-3 text-m focus:outline-none focus:ring-2 focus:ring-orange-primary focus:border-transparent mobile-optimized flex items-center justify-between hover:bg-secondary transition-all duration-300"
                   >
                     <div className="flex items-center space-x-3">
                       <TokenLogo token={outputTokenInfo} size={6} />
                       <div className="text-left">
-                        <div className="font-medium text-m text-white">{outputTokenSymbol}</div>
-                        <div className="text-xs text-gray-400">click to search tokens</div>
+                        <div className="font-medium text-m text-primary">{outputTokenSymbol}</div>
+                        <div className="text-xs text-secondary">click to search tokens</div>
                       </div>
                     </div>
                     <ChevronDown className={`h-4 w-4 transition-transform ${showTokenSearch ? 'rotate-180' : ''}`} />
                   </button>
                   
                   {showTokenSearch && (
-                    <div className="absolute z-50 w-full mt-2 bg-gray-800/95 backdrop-blur-xl border border-gray-600 rounded-2xl shadow-2xl max-h-80 overflow-hidden">
+                    <div className="absolute z-50 w-full mt-2 bg-secondary backdrop-blur-xl border border-primary  shadow-2xl max-h-80 overflow-hidden">
                       {/* Search Header */}
-                      <div className="p-4 border-b border-gray-700">
+                      <div className="p-4 border-b border-primary">
                         <div className="relative">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-secondary h-4 w-4" />
                           <input
                             type="text"
                             placeholder="search for any token on solana..."
@@ -1004,7 +1508,7 @@ export function SwapInterface({
                               setSearchQuery(e.target.value);
                               searchTokens(e.target.value);
                             }}
-                            className="w-full pl-10 pr-4 py-3 bg-gray-700/50 border border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-transparent text-m placeholder-gray-400"
+                            className="w-full pl-10 pr-4 py-3 bg-tertiary border border-primary  focus:outline-none focus:ring-2 focus:ring-orange-primary focus:border-transparent text-m placeholder-secondary"
                           />
                           {searchQuery && (
                             <button
@@ -1014,7 +1518,7 @@ export function SwapInterface({
                               }}
                               className="absolute right-3 top-1/2 transform -translate-y-1/2"
                             >
-                              <X className="h-4 w-4 text-gray-400 hover:text-white" />
+                              <X className="h-4 w-4 text-secondary hover:text-primary" />
                             </button>
                           )}
                         </div>
@@ -1024,7 +1528,7 @@ export function SwapInterface({
                         {/* Popular Tokens */}
                         {!searchQuery && (
                           <div className="p-2">
-                            <div className="px-3 py-2 text-xs font-semibold text-gray-400 lowercase tracking-wide">
+                            <div className="px-3 py-2 text-xs font-semibold text-secondary lowercase tracking-wide">
                               Popular Tokens
                             </div>
                             {popularTokens.map(token => (
@@ -1041,13 +1545,15 @@ export function SwapInterface({
                         {/* Search Results */}
                         {searchQuery && (
                           <div className="p-2">
-                            <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                            <div className="px-3 py-2 text-xs font-semibold text-secondary uppercase tracking-wide">
                               search results
                             </div>
                             {isSearching ? (
                               <div className="flex justify-center items-center py-8">
-                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-500"></div>
-                                <span className="ml-2 text-m text-gray-400">searching...</span>
+                                <div className="h-6 w-6" style={{ color: 'var(--orange-primary)' }}>
+                                  <div className="circular-dot-spinner"></div>
+                                </div>
+                                <span className="ml-2 text-m text-secondary">searching...</span>
                               </div>
                             ) : searchResults.length > 0 ? (
                               searchResults.map(token => (
@@ -1059,7 +1565,7 @@ export function SwapInterface({
                                 />
                               ))
                             ) : (
-                              <div className="text-center py-8 text-gray-400 text-m">
+                              <div className="text-center py-8 text-secondary text-m">
                                 no tokens found matching {searchQuery}
                               </div>
                             )}
@@ -1068,8 +1574,8 @@ export function SwapInterface({
 
                         {/* Wallet Tokens */}
                         {!searchQuery && sortedOutputTokens.length > 0 && (
-                          <div className="p-2 border-t border-gray-700">
-                            <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                          <div className="p-2 border-t border-primary">
+                            <div className="px-3 py-2 text-xs font-semibold text-secondary uppercase tracking-wide">
                               your Tokens
                             </div>
                             {sortedOutputTokens.map(token => (
@@ -1089,37 +1595,37 @@ export function SwapInterface({
 
                 {/* Selected Token Details */}
                 {outputTokenInfo && (
-                  <div className="bg-gray-700/30 border border-gray-600 rounded-xl p-3 space-y-2">
+                  <div className="bg-tertiary border border-primary  p-3 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-400">selected token</span>
+                      <span className="text-xs text-secondary">selected token</span>
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(outputTokenInfo.mint);
                           }}
-                          className="p-1.5 hover:bg-gray-600/50 rounded transition-colors mobile-optimized"
+                          className="p-1.5 hover:bg-secondary  transition-colors mobile-optimized"
                           title="Copy mint address"
                         >
-                          <Copy className="h-3 w-3 text-gray-400 hover:text-white" />
+                          <Copy className="h-3 w-3 text-secondary hover:text-primary" />
                         </button>
                         <a
                           href={`https://orb.helius.dev/address/${outputTokenInfo.mint}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="p-1.5 hover:bg-gray-600/50 rounded transition-colors mobile-optimized"
+                          className="p-1.5 hover:bg-secondary  transition-colors mobile-optimized"
                           title="view on orb explorer"
                         >
-                          <ExternalLink className="h-3 w-3 text-gray-400 hover:text-white" />
+                          <ExternalLink className="h-3 w-3 text-secondary hover:text-primary" />
                         </a>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       <TokenLogo token={outputTokenInfo} size={6} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-white truncate">
+                        <div className="text-sm font-medium text-primary truncate">
                           {outputTokenInfo.symbol}
                         </div>
-                        <div className="text-xs text-gray-400 truncate font-mono">
+                        <div className="text-xs text-secondary truncate font-mono">
                           {outputTokenInfo.mint.slice(0, 8)}...{outputTokenInfo.mint.slice(-8)}
                         </div>
                       </div>
@@ -1139,9 +1645,9 @@ export function SwapInterface({
                     step="0.1"
                     value={slippage}
                     onChange={(e) => setSlippage(parseFloat(e.target.value))}
-                    className="w-full accent-gray-500 mobile-optimized"
+                    className="w-full accent-orange-primary mobile-optimized"
                   />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  <div className="flex justify-between text-xs text-secondary mt-1">
                     <span>0.5%</span>
                     <span>5%</span>
                   </div>
@@ -1157,16 +1663,16 @@ export function SwapInterface({
               {proRataTokens
                 .sort((a, b) => b.liquidationAmount - a.liquidationAmount)
                 .map((token) => (
-                  <div key={token.mint} className="flex justify-between items-center text-xs sm:text-m bg-gray-700/30 p-2 rounded">
+                  <div key={token.mint} className="flex justify-between items-center text-xs sm:text-m bg-tertiary p-2 ">
                     <div className="flex items-center space-x-2 min-w-0 flex-1">
                       <TokenLogo token={token} size={6} />
                       <span className="truncate lowercase">{token.symbol}</span>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-green-400">
+                      <div className="text-green-primary">
                         {token.swapAmount > 0.0001 ? token.swapAmount.toFixed(4) : token.swapAmount.toFixed(6)}
                       </div>
-                      <div className="text-gray-400 text-xs">
+                      <div className="text-secondary text-xs">
                         ${token.liquidationAmount.toFixed(2)}
                       </div>
                     </div>
@@ -1177,14 +1683,14 @@ export function SwapInterface({
          
           {/* Swap Results */}
           {swapResults.length > 0 && (
-            <div className="ml-3 mr-3 mb-4 p-3 bg-gray-700/50 border border-gray-600 rounded-lg">
+            <div className="ml-3 mr-3 mb-4 p-3 bg-tertiary border border-primary ">
               <div className="flex justify-between items-center mb-2">
                 <h4 className="font-medium text-m sm:text-base">liquidation results</h4>
                 {hasFailedSwaps && (
                   <button
                     onClick={() => {/* Add retry logic */}}
                     disabled={swapping}
-                    className="text-xs bg-yellow-600 hover:bg-yellow-700 px-2 py-1 rounded flex items-center space-x-1 mobile-optimized"
+                    className="text-xs bg-yellow-600 hover:bg-yellow-700 px-2 py-1  flex items-center space-x-1 mobile-optimized"
                   >
                     <RefreshCw className="h-3 w-3" />
                     <span>failed</span>
@@ -1195,13 +1701,13 @@ export function SwapInterface({
                 {swapResults.map((result, index) => (
                   <div key={index} className="flex justify-between items-center text-xs sm:text-m">
                     <div className="flex items-center space-x-2 min-w-0 flex-1">
-                      <span className={`truncate ${result.error ? 'text-red-400' : 'text-green-400'}`}>
+                      <span className={`truncate ${result.error ? 'text-orange-dark' : 'text-green-primary'}`}>
                         {result.symbol}
                       </span>
                     </div>
                     <div className="text-right flex-shrink-0">
                       {result.error ? (
-                        <span className="text-red-400 text-xs">failed</span>
+                        <span className="text-orange-dark text-xs">failed</span>
                       ) : result.signature ? (
                         <div className="flex flex-col items-end">
                           <a 
@@ -1213,7 +1719,7 @@ export function SwapInterface({
                             <span>success</span>
                             <ExternalLink className="h-3 w-3" />
                           </a>
-                          <div className="text-gray-400 text-xs">
+                          <div className="text-secondary text-xs">
                             {result.inputAmount > 0.0001 ? result.inputAmount.toFixed(4) : result.inputAmount.toFixed(6)}
                           </div>
                         </div>
@@ -1229,21 +1735,66 @@ export function SwapInterface({
 
           {/* Current Step Indicator */}
           {swapping && currentStep && (
-            <div className="ml-3 mr-3 mb-4 p-3 bg-gray-500/20 border border-gray-400 rounded-lg">
+            <div className="ml-3 mr-3 mb-4 p-3 bg-tertiary border border-primary ">
               <div className="flex items-center justify-between">
-                <span className="text-xs sm:text-m text-gray-200">{currentStep}</span>
-                <div className="animate-spin rounded-full h-3 w-3 sm:h-4 sm:w-4 border-b-2 border-white"></div>
+                <span className="text-xs sm:text-m text-primary">{currentStep}</span>
+                <div className="h-3 w-3 sm:h-4 sm:w-4" style={{ color: 'var(--orange-primary)' }}>
+                  <div className="circular-dot-spinner"></div>
+                </div>
               </div>
             </div>
           )}
 
           {error && (
-          <div className="mb-4 p-3 bg-red-500/20 border border-red-500 rounded-lg">
-            <div className="flex items-center space-x-2 text-red-200 mb-2">
+          <div className="mb-4 p-3 border " style={{
+            background: 'rgba(217, 79, 31, 0.1)',
+            borderColor: 'var(--border-error)',
+            color: 'var(--orange-dark)'
+          }}>
+            <div className="flex items-center space-x-2 mb-2">
               <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4" />
               <span className="text-xs sm:text-m font-medium">{getProcessName} error</span>
             </div>
-            <span className="text-xs sm:text-m">{error}</span>
+            <span className="text-xs sm:text-m block mb-3">{error}</span>
+            
+            {/* Retry buttons when bundle fails */}
+            {failedTokens.length > 0 && !swapping && (
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={retryBundled}
+                  className="flex-1 py-2 px-3 rounded text-xs sm:text-sm font-medium transition-all flex items-center justify-center space-x-1 mobile-optimized"
+                  style={{
+                    background: 'var(--orange-primary)',
+                    color: 'white',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--orange-dark)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'var(--orange-primary)'}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>retry bundled</span>
+                </button>
+                <button
+                  onClick={retryIndividually}
+                  className="flex-1 py-2 px-3 rounded text-xs sm:text-sm font-medium transition-all flex items-center justify-center space-x-1 mobile-optimized"
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-primary)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-secondary)';
+                    e.currentTarget.style.borderColor = 'var(--orange-primary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-tertiary)';
+                    e.currentTarget.style.borderColor = 'var(--border-primary)';
+                  }}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>retry individually</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1252,12 +1803,14 @@ export function SwapInterface({
             <button
             onClick={executeLiquidation}
             disabled={swapping || selectedTokens.length === 0 || !publicKey || liquidationPercentage === 0}
-            className="w-full bg-gradient-to-r from-gray-600 to-gray-600 hover:from-gray-500 hover:to-gray-400 disabled:opacity-50 disabled:cursor-not-allowed py-3 px-4 rounded-lg font-medium transition-all duration-200 transform hover:scale-[1.02] flex items-center justify-center space-x-2 mobile-optimized text-m sm:text-base min-h-[44px]"
+            className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed py-3 px-4  font-medium transition-all duration-300 transform flex items-center justify-center space-x-2 mobile-optimized text-m sm:text-base min-h-[44px]"
           >
             {swapping ? (
               <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                <span className="text-xs sm:text-m">{getActionVerb}ing... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
+                <div className="h-4 w-4 text-white" style={{ color: 'white' }}>
+                  <div className="circular-dot-spinner"></div>
+                </div>
+                <span className="text-xs sm:text-m">{isLiquidation ? 'liquidating' : 'swapping pro rata'}... ({swapResults.filter(r => !r.error).length}/{selectedTokens.length})</span>
               </>
             ) : (
               <>
@@ -1272,7 +1825,7 @@ export function SwapInterface({
           </div>
 
           {!publicKey && (
-          <div className="mt-3 p-2 bg-yellow-500/20 border border-yellow-500 rounded-lg">
+          <div className="mt-3 p-2 bg-yellow-500/20 border border-yellow-500 ">
             <p className="text-xs text-yellow-200 text-center">
               connect your wallet to enable {isLiquidation ? 'liquidation' : 'pro-rata swap'}
             </p>
